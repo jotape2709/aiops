@@ -1,1 +1,1 @@
-"""Futura fronteira para fontes públicas de dados reais; nenhuma integração em M1."""
+"""Clientes HTTP isolados para fontes públicas; a UI acessa apenas a camada de serviços."""

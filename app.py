@@ -5,6 +5,7 @@ from src.kpis import compute_kpis
 from src.models import Scenario
 from src.synthetic_data import Sample, generate_sample
 from src.ui.cards import render_kpis
+from src.ui.real_data import render_real_data
 from src.ui.theme import apply_theme
 from src.ui.topology import topology_figure
 
@@ -44,18 +45,31 @@ if (
 st.sidebar.caption(f"Amostra #{st.session_state.sample_index + 1}")
 
 st.title("AIOps Network Operations Center")
-st.caption("Laboratório de observabilidade e análise de incidentes com dados 100% sintéticos")
+st.caption("Laboratório sintético de NOC + dados públicos reais da Internet, em abas separadas")
 
-kpis = compute_kpis(sample)
-render_kpis(
-    (
-        ("Disponibilidade", f"{kpis.availability:.1f}%"),
-        ("Alertas ativos", str(kpis.active_alerts)),
-        ("Incidentes críticos", str(kpis.critical_incidents)),
-        ("Serviços impactados", str(kpis.impacted_services)),
-        ("Latência média", f"{kpis.mean_latency:.1f} ms"),
-    )
+noc_tab, real_tab = st.tabs(
+    ["Laboratório NOC (sintético)", "Internet pública — RIPE Atlas (dados reais)"],
+    key="main_tabs",
+    on_change="rerun",
 )
+with noc_tab:
+    if noc_tab.open:
+        st.caption(
+            "Laboratório de observabilidade e análise de incidentes com dados 100% sintéticos"
+        )
+        kpis = compute_kpis(sample)
+        render_kpis(
+            (
+                ("Disponibilidade", f"{kpis.availability:.1f}%"),
+                ("Alertas ativos", str(kpis.active_alerts)),
+                ("Incidentes críticos", str(kpis.critical_incidents)),
+                ("Serviços impactados", str(kpis.impacted_services)),
+                ("Latência média", f"{kpis.mean_latency:.1f} ms"),
+            )
+        )
+        st.subheader("Topologia da rede")
+        st.plotly_chart(topology_figure(sample.nodes, sample.links), width="stretch")
 
-st.subheader("Topologia da rede")
-st.plotly_chart(topology_figure(sample.nodes, sample.links), width="stretch")
+with real_tab:
+    if real_tab.open:
+        render_real_data()

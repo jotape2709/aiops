@@ -23,12 +23,15 @@
 - [ ] Gráfico de severidade
 - [ ] Tabela de eventos
 - [ ] Tema visual NOC
-- [ ] Testes (parcial: 10 testes do M1 passando)
+- [ ] Testes (parcial: 21 testes passando — M1 + RIPE Atlas)
 - [x] Ruff
 - [ ] README
 - [ ] docs/architecture.md
 - [ ] docs/linkedin.md
 - [ ] QA final
+- [x] Integração real: RIPE Atlas (probes BR/SP)
+- [ ] Integração real: RIPEstat
+- [ ] Integração real: PeeringDB
 
 ## Regra
 
@@ -53,6 +56,12 @@ Backlog herdado do QA do M1:
 - latência de nó inalcançável como N/D no tooltip, em vez de valor degradado;
 - hover dos links só nas extremidades (limitação do Plotly; aceitável).
 
-### M3 — Primeira integração real: RIPE Atlas
+### M3 — Primeira integração real: RIPE Atlas ✅ concluído (2026-09-23, aprovado pelo QA após M3.1/M3.2)
 
-Somente após M1 validado. RIPEstat, PeeringDB e Anatel ficam para depois.
+GET público em `/api/v2/probes/?country_code=BR` (urllib, timeout 10 s, até 6 páginas), recorte SP local (100 km).
+Aba "Internet pública — RIPE Atlas (dados reais)" separada da simulação, com cache de 600 s, fallback e cooldown de atualização.
+RIPEstat, PeeringDB e Anatel ficam para depois.
+
+Backlog herdado do QA do M3:
+- fallback UNAVAILABLE perde `reported_count`/`invalid_count` (irrelevante hoje);
+- orçamento total de tempo da coleta (pior caso ~60 s com 6 páginas).
