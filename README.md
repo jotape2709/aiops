@@ -1,0 +1,107 @@
+# AIOps Network Operations Dashboard
+
+Laboratório local de observabilidade e análise de incidentes de rede: gera telemetria sintética determinística de uma topologia corporativa, calcula KPIs operacionais, correlaciona alertas em incidentes e aponta a causa raiz por regras — tudo em um dashboard Streamlit, com uma aba separada de dados públicos reais da Internet usada apenas como contexto de conectividade externa.
+
+**Python 3.11+ · Streamlit · Dados sintéticos**
+
+> **AVISO — origem dos dados:** este é um laboratório NOC **100% sintético**. Os endereços IP são faixas de documentação (RFC 5737, ex.: `192.0.2.0/24`), não há dados de empresa, não há inspeção da rede real da máquina nem scan de rede, e nenhuma credencial ou API paga é necessária. A aba **RIPE Atlas** consulta somente dados **públicos reais, somente-leitura** (GET sem autenticação); eles descrevem a distribuição de sondas de medição da Internet brasileira e **não indicam incidentes de operadoras** nem falhas do laboratório.
+
+## Funcionalidades
+
+- **5 KPIs**: Disponibilidade, Alertas ativos, Incidentes críticos, Serviços impactados e Latência média.
+- **Topologia interativa** com estado de nós e enlaces e destaque do componente causador apontado pela RCA.
+- **Painel de causa raiz por regras** determinísticas — sem LLM e sem APIs pagas.
+- **3 gráficos**: latência fim a fim (com limiares SLO derivados do baseline), utilização de links e incidentes ativos por severidade.
+- **Tabela de eventos** com histórico de ocorrências e registro de recuperação.
+- **Simular incidente / Restaurar ambiente** (e *Gerar nova amostra*) na barra lateral.
+- **Seed reproduzível** (padrão `42`): mesma semente + mesmo cenário ⇒ mesmos números.
+- **Aba RIPE Atlas**: sondas públicas reais do Brasil, com recorte da região de São Paulo (raio de 100 km).
+
+## Arquitetura (resumida)
+
+Quatro camadas, com fronteiras rígidas entre apresentação e domínio:
+
+- **UI (apresentação)** — `app.py` + `src/ui/**`: composição Streamlit, tema/CSS, cards, gráficos Plotly, topologia visual, tabela de eventos e estados visuais. Consome apenas contratos tipados do Core; nunca realiza HTTP nem importa `src/integrations/**`.
+- **Core (domínio)** — `src/kpis.py`, `src/chart_data.py`, `src/event_data.py`, `src/root_cause.py`, `src/simulation_state.py`, `src/network_topology.py`, `src/synthetic_data.py`, `src/incident_engine.py`, `src/models.py` e `src/config.py`: funções puras e `dataclass(frozen)`, sem Streamlit, com seed em toda aleatoriedade relevante.
+- **services** — `src/services/real_data_service.py`: orquestra a coleta pública e o recorte geográfico de São Paulo (Haversine).
+- **integrations** — `src/integrations/ripe_atlas.py`: única camada que faz chamadas de rede (GET público da API RIPE Atlas, com timeout, limite de páginas e orçamento de tempo).
+
+Documentação completa, com diagrama de fluxo e as premissas do domínio (ECMP, limiares SLO, correlação de incidentes): [docs/architecture.md](docs/architecture.md).
+
+## Instalação e execução
+
+Pré-requisito: **Python 3.11+**.
+
+### Windows (PowerShell)
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+### Linux / macOS
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+A aplicação abre em `http://localhost:8501`. Após a instalação das dependências, o laboratório NOC funciona **offline**; a aba RIPE Atlas é opcional e requer acesso à internet (sem rede, a interface informa a indisponibilidade e mantém a última coleta bem-sucedida).
+
+### Testes e lint
+
+Com o ambiente virtual ativado:
+
+```text
+python -m pytest
+ruff check .
+```
+
+No Windows, sem ativar o venv, o equivalente é `.\.venv\Scripts\python.exe -m pytest` e `.\.venv\Scripts\ruff.exe check .`.
+
+## Cenários
+
+Todos os valores abaixo foram medidos com **seed 42, variante 0**, via `compute_kpis(generate_sample(42, <cenário>, 0))` (`src/kpis.py` / `src/synthetic_data.py`). Use a barra lateral (*Cenário a simular* → **Simular incidente** / **Restaurar ambiente**) para reproduzi-los na interface.
+
+| Cenário | O que acontece | O que observar (KPIs medidos) |
+| --- | --- | --- |
+| **Normal** | Baseline: todos os nós e enlaces `UP`, sem alertas. | Disponibilidade `100.0%`; latência média `64.0 ms`; `0` alertas; `0` incidentes críticos; `0` serviços impactados. |
+| **Link degradado** | O enlace `RTR-EDGE-01 ↔ FW-CORE-01` degrada (90 ms, 5% de perda); o redundante sobe para 82% de utilização (acima do limiar de 80%). | Disponibilidade `100.0%`; latência média `113.3 ms`; `2` alertas (aviso); `0` incidentes críticos; `3` serviços impactados (WEB, DATABASE e API degradados). |
+| **Link down** | O enlace `SW-CORE-01 ↔ SW-ACCESS-01` cai; o tráfego faz reroute pelo enlace cruzado, que chega a 91% de utilização. | Disponibilidade `100.0%`; latência média `75.6 ms`; `1` alerta; `1` incidente crítico; `1` serviço impactado (WEB degradado). |
+| **Core switch down** | `SW-CORE-01` cai e arrasta todos os serviços — WEB, DATABASE e API ficam inalcançáveis a partir da Internet. | Disponibilidade `25.0%`; latência média `N/D` (nenhum serviço alcançável); `1` alerta; `1` incidente crítico; `3` serviços impactados. |
+| **CPU alta** | `SRV-API-01` fica em 92% de CPU por amostras consecutivas (persistência), degradando o serviço API. | Disponibilidade `100.0%`; latência média `82.6 ms`; `1` alerta crítico; `1` incidente crítico; `1` serviço impactado. |
+
+**Premissa de latência (ECMP):** os caminhos fim a fim usam distribuição por caminhos mínimos de peso igual; a média do cenário Normal (`64.0 ms`) é o baseline do qual os limiares de SLO são derivados (aviso = baseline × 1,25; crítico = baseline × 1,75). `N/D` significa que nenhum serviço de negócio está alcançável.
+
+## Screenshots
+
+Seção preparada — os PNGs ainda não estão no repositório (a pasta é mantida versionada por `assets/.gitkeep`). Para gerar:
+
+1. Rode `streamlit run app.py` com a seed padrão `42` e viewport de **1920x1080**.
+2. Capture a aba *Laboratório NOC (sintético)* no estado **Normal** (use **Restaurar ambiente** se houver falha ativa) e salve como `assets/noc-normal.png`.
+3. Na barra lateral, selecione **Core switch down** e clique em **Simular incidente**; salve como `assets/noc-core-down.png`.
+4. Abra a aba *Internet pública — RIPE Atlas (dados reais)* e salve como `assets/ripe-atlas.png`.
+
+| Arquivo | Cenário | Estado |
+| --- | --- | --- |
+| `assets/noc-normal.png` | Normal | a gerar |
+| `assets/noc-core-down.png` | Core switch down | a gerar |
+| `assets/ripe-atlas.png` | Aba RIPE Atlas | a gerar |
+
+## Roadmap / V2
+
+- **RIPEstat**: anúncios BGP, visibilidade de rotas e reputação de ASNs.
+- **PeeringDB**: validação de conexões em Pontos de Troca de Tráfego (IX.br / PTT).
+- **Adaptador LLM opcional**: sumarização executiva da RCA em linguagem natural, mantendo o motor determinístico como fonte primária da verdade.
+- **Histórico persistente**: backend local (SQLite/DuckDB) para tendências de longo prazo e MTTR.
+- **Detecção estatística de anomalias**: z-score adaptativo e Holt-Winters no lugar de limiares estáticos.
+- **SLA/SLO**: indicadores e objetivos por serviço de negócio.
+- **Exportação de relatório**: resumo executivo de incidentes e KPIs para compartilhamento.
+
+## Licença
+
+A definir.

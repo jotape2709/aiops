@@ -2,7 +2,7 @@
 
 ## Status
 
-- [ ] Bootstrap do repositório (estrutura pronta; sem commit inicial)
+- [x] Bootstrap do repositório
 - [x] Ambiente virtual e dependências
 - [x] Estrutura de módulos
 - [x] Gerador de dados sintéticos
@@ -25,10 +25,10 @@
 - [x] Tema visual NOC
 - [x] Testes (79 passando, inclui smoke AppTest da UI)
 - [x] Ruff
-- [ ] README
+- [x] README
 - [x] docs/architecture.md
-- [ ] docs/linkedin.md
-- [ ] QA final
+- [x] docs/linkedin.md
+- [x] QA final
 - [x] Integração real: RIPE Atlas (probes BR/SP)
 - [ ] Integração real: RIPEstat
 - [ ] Integração real: PeeringDB
@@ -58,7 +58,13 @@ Premissas: impacto por ECMP (caminhos mínimos por saltos) + reroute + servidor 
 
 **M2b ✅ concluído (2026-09-23):** gráficos de latência (SLO relativo ao baseline), utilização de links e incidentes por severidade; tabela de eventos; acabamento visual; selos SIMULAÇÃO NOC vs DADOS PÚBLICOS REAIS; contratos endurecidos (rótulos PT únicos, `UtilizationBand`, `topology_view` sem NetworkX na UI, `component_kind`, `truncated_reason`); última coleta boa do RIPE. Validado por revisão cruzada Antigravity↔OpenCode, gates, smoke AppTest e Portal 1366x768/1920x1080. Backlogs visuais do M1/M2a resolvidos aqui.
 
-**M4 (em andamento):** docs/architecture.md ✅; faltam README, docs/linkedin.md, assets/.gitkeep e QA final (checklist seção 17).
+**M4 ✅ concluído (2026-09-23):** README.md, docs/architecture.md, docs/linkedin.md, assets/.gitkeep. QA final (Antigravity) aprovou todos os critérios da seção 17 e da seção 15; tabela de cenários do README conferida contra `compute_kpis` (seed 42).
+
+**Pendências humanas (não bloqueiam o MVP):**
+- gerar screenshots em `assets/` (instruções no README);
+- reprodução em venv limpo não executada pelo Lead: o caminho temporário excede o limite de caminho do Windows (long paths desativado);
+- decidir publicação: `origin/main` está em M2a (153c1fa); M2b e M4 só locais;
+- escolher licença (README: "A definir").
 
 Backlog herdado do QA do M1:
 - símbolos de marcador por tipo de nó (seção 11);
