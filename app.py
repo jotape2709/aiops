@@ -11,6 +11,7 @@ from src.ui.badges import render_real_badge, render_simulation_badge
 from src.ui.cards import render_kpis
 from src.ui.charts import latency_figure, severity_figure, utilization_figure
 from src.ui.event_table import render_event_table
+from src.ui.peeringdb import render_peeringdb
 from src.ui.real_data import render_real_data
 from src.ui.root_cause import render_analysis
 from src.ui.theme import apply_theme
@@ -71,8 +72,12 @@ st.sidebar.caption(f"Cenário ativo: {SCENARIO_LABELS.get(sample.scenario, 'Norm
 st.title("AIOps Network Operations Center")
 st.caption("Laboratório sintético de NOC + dados públicos reais da Internet, em abas separadas")
 
-noc_tab, real_tab = st.tabs(
-    ["Laboratório NOC (sintético)", "Internet pública — RIPE Atlas (dados reais)"],
+noc_tab, real_tab, peering_tab = st.tabs(
+    [
+        "Laboratório NOC (sintético)",
+        "Internet pública — RIPE Atlas (dados reais)",
+        "Internet pública — PeeringDB (dados reais)",
+    ],
     key="main_tabs",
     on_change="rerun",
 )
@@ -141,3 +146,8 @@ with real_tab:
     if real_tab.open:
         render_real_badge()
         render_real_data()
+
+with peering_tab:
+    if peering_tab.open:
+        render_real_badge("PeeringDB")
+        render_peeringdb()

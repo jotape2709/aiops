@@ -1,10 +1,10 @@
 # AIOps Network Operations Dashboard
 
-Laboratório local de observabilidade e análise de incidentes de rede: gera telemetria sintética determinística de uma topologia corporativa, calcula KPIs operacionais, correlaciona alertas em incidentes e aponta a causa raiz por regras — tudo em um dashboard Streamlit, com uma aba separada de dados públicos reais da Internet usada apenas como contexto de conectividade externa.
+Laboratório local de observabilidade e análise de incidentes de rede: gera telemetria sintética determinística de uma topologia corporativa, calcula KPIs operacionais, correlaciona alertas em incidentes e aponta a causa raiz por regras — tudo em um dashboard Streamlit, com abas separadas de dados públicos reais da Internet usadas apenas como contexto de conectividade externa.
 
 **Python 3.11+ · Streamlit · Dados sintéticos**
 
-> **AVISO — origem dos dados:** este é um laboratório NOC **100% sintético**. Os endereços IP são faixas de documentação (RFC 5737, ex.: `192.0.2.0/24`), não há dados de empresa, não há inspeção da rede real da máquina nem scan de rede, e nenhuma credencial ou API paga é necessária. A aba **RIPE Atlas** consulta somente dados **públicos reais, somente-leitura** (GET sem autenticação); eles descrevem a distribuição de sondas de medição da Internet brasileira e **não indicam incidentes de operadoras** nem falhas do laboratório.
+> **AVISO — origem dos dados:** este é um laboratório NOC **100% sintético**. Os endereços IP são faixas de documentação (RFC 5737, ex.: `192.0.2.0/24`), não há dados de empresa, não há inspeção da rede real da máquina nem scan de rede, e nenhuma credencial ou API paga é necessária. As abas **RIPE Atlas** e **PeeringDB** consultam somente dados **públicos reais, somente-leitura** via GET anônimo, sem API key; os contatos técnicos eventualmente presentes nas respostas são descartados e não são exibidos. Eles descrevem a distribuição de sondas de medição da Internet brasileira e a infraestrutura de interconexão (IXPs e data centers) e **não indicam incidentes de operadoras** nem falhas do laboratório.
 
 ## Funcionalidades
 
@@ -16,6 +16,7 @@ Laboratório local de observabilidade e análise de incidentes de rede: gera tel
 - **Simular incidente / Restaurar ambiente** (e *Gerar nova amostra*) na barra lateral.
 - **Seed reproduzível** (padrão `42`): mesma semente + mesmo cenário ⇒ mesmos números.
 - **Aba RIPE Atlas**: sondas públicas reais do Brasil, com recorte da região de São Paulo (raio de 100 km).
+- **Aba PeeringDB** (terceira aba): IXPs e data centers públicos do Brasil com destaque para São Paulo — dados públicos de infraestrutura que **não indicam incidentes** nem desempenho de operadoras. Como exemplo datado da carga real feita em **23/09/2026** (os números variam): `53` IXPs no Brasil, `366` data centers (`91` em SP) e maior IXP `IX.br (PTT.br) São Paulo` com `1859` redes conectadas.
 
 ## Arquitetura (resumida)
 
@@ -24,7 +25,7 @@ Quatro camadas, com fronteiras rígidas entre apresentação e domínio:
 - **UI (apresentação)** — `app.py` + `src/ui/**`: composição Streamlit, tema/CSS, cards, gráficos Plotly, topologia visual, tabela de eventos e estados visuais. Consome apenas contratos tipados do Core; nunca realiza HTTP nem importa `src/integrations/**`.
 - **Core (domínio)** — `src/kpis.py`, `src/chart_data.py`, `src/event_data.py`, `src/root_cause.py`, `src/simulation_state.py`, `src/network_topology.py`, `src/synthetic_data.py`, `src/incident_engine.py`, `src/models.py` e `src/config.py`: funções puras e `dataclass(frozen)`, sem Streamlit, com seed em toda aleatoriedade relevante.
 - **services** — `src/services/real_data_service.py`: orquestra a coleta pública e o recorte geográfico de São Paulo (Haversine).
-- **integrations** — `src/integrations/ripe_atlas.py`: única camada que faz chamadas de rede (GET público da API RIPE Atlas, com timeout, limite de páginas e orçamento de tempo).
+- **integrations** — `src/integrations/ripe_atlas.py` e `src/integrations/peeringdb.py`: única camada que faz chamadas de rede (GET público das APIs RIPE Atlas e PeeringDB, com timeout).
 
 Documentação completa, com diagrama de fluxo e as premissas do domínio (ECMP, limiares SLO, correlação de incidentes): [docs/architecture.md](docs/architecture.md).
 
@@ -50,7 +51,7 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-A aplicação abre em `http://localhost:8501`. Após a instalação das dependências, o laboratório NOC funciona **offline**; a aba RIPE Atlas é opcional e requer acesso à internet (sem rede, a interface informa a indisponibilidade e mantém a última coleta bem-sucedida).
+A aplicação abre em `http://localhost:8501`. Após a instalação das dependências, o laboratório NOC funciona **offline**; as abas RIPE Atlas e PeeringDB são opcionais e requerem acesso à internet (sem rede, a interface informa a indisponibilidade e mantém a última coleta bem-sucedida). O PeeringDB tem **rate limit anônimo**: ao responder `429 Too Many Requests`, a interface respeita o `Retry-After` indicado antes de nova tentativa e mantém a coleta em cache local por **1 hora**.
 
 ### Testes e lint
 
@@ -85,17 +86,22 @@ Seção preparada — os PNGs ainda não estão no repositório (a pasta é mant
 2. Capture a aba *Laboratório NOC (sintético)* no estado **Normal** (use **Restaurar ambiente** se houver falha ativa) e salve como `assets/noc-normal.png`.
 3. Na barra lateral, selecione **Core switch down** e clique em **Simular incidente**; salve como `assets/noc-core-down.png`.
 4. Abra a aba *Internet pública — RIPE Atlas (dados reais)* e salve como `assets/ripe-atlas.png`.
+5. Abra a aba *Internet pública — PeeringDB (dados reais)* e salve como `assets/peeringdb.png`.
 
 | Arquivo | Cenário | Estado |
 | --- | --- | --- |
 | `assets/noc-normal.png` | Normal | a gerar |
 | `assets/noc-core-down.png` | Core switch down | a gerar |
 | `assets/ripe-atlas.png` | Aba RIPE Atlas | a gerar |
+| `assets/peeringdb.png` | Aba PeeringDB | a gerar |
 
 ## Roadmap / V2
 
+**Implementado (M5):** **PeeringDB** — terceira aba com IXPs e data centers públicos do Brasil com destaque para São Paulo (ver *Funcionalidades*).
+
+Pendentes para **V2**:
+
 - **RIPEstat**: anúncios BGP, visibilidade de rotas e reputação de ASNs.
-- **PeeringDB**: validação de conexões em Pontos de Troca de Tráfego (IX.br / PTT).
 - **Adaptador LLM opcional**: sumarização executiva da RCA em linguagem natural, mantendo o motor determinístico como fonte primária da verdade.
 - **Histórico persistente**: backend local (SQLite/DuckDB) para tendências de longo prazo e MTTR.
 - **Detecção estatística de anomalias**: z-score adaptativo e Holt-Winters no lugar de limiares estáticos.

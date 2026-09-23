@@ -5,7 +5,7 @@
 O **AIOps Network Operations Dashboard** é uma plataforma de observabilidade e engenharia de confiabilidade de rede projetada para operar em ambiente local (*air-gapped* e sem dependências de infraestrutura corporativa real). O sistema estrutura-se sobre duas camadas de dados completamente segregadas:
 
 1. **Laboratório NOC (100% Sintético)**: Ambiente simulado de telemetria de rede enterprise/datacenter (nós, enlaces, serviços de negócio, consumo de CPU, latência, perda de pacotes e disponibilidade). Essa camada alimenta todo o fluxo de monitoramento operacional, correlação de alertas, geração de incidentes e análise determinística de causa raiz (RCA).
-2. **Internet Pública (RIPE Atlas — Dados Reais)**: Monitoramento da infraestrutura externa de sondas de medição ativas no Brasil coletadas via API pública da RIPE NCC. **Esses dados refletem a topologia de sondas da Internet brasileira e NÃO indicam incidentes ou falhas na rede do laboratório**, servindo estritamente como telemetria de contexto de conectividade externa.
+2. **Internet Pública (RIPE Atlas e PeeringDB — Dados Reais)**: Monitoramento da infraestrutura externa de sondas de medição (RIPE Atlas) e de pontos de troca de tráfego e data centers (PeeringDB) no Brasil. **Esses dados refletem a topologia e interconexão pública da Internet e NÃO indicam incidentes ou falhas na rede do laboratório**, servindo estritamente como telemetria de contexto de conectividade externa.
 
 ---
 
@@ -22,6 +22,7 @@ flowchart TD
         APP["app.py"]
         UI_NOC["src/ui/cards.py\nsrc/ui/charts.py\nsrc/ui/event_table.py\nsrc/ui/topology.py\nsrc/ui/root_cause.py"]
         UI_REAL["src/ui/real_data.py"]
+        UI_PDB["src/ui/peeringdb.py"]
     end
 
     subgraph CoreContracts ["Contratos de Domínio (Core APIs)"]
@@ -42,14 +43,18 @@ flowchart TD
     end
 
     subgraph ExternalServices ["Camada de Serviços e Integrações"]
-        SERVICE["src/services/real_data_service.py (get_real_data_status)"]
-        INTEG["src/integrations/ripe_atlas.py (fetch_br_probes)"]
+        SERVICE_RIPE["src/services/real_data_service.py\n(get_real_data_status)"]
+        SERVICE_PDB["src/services/real_data_service.py\n(get_peeringdb_status)"]
+        INTEG_RIPE["src/integrations/ripe_atlas.py\n(fetch_br_probes)"]
+        INTEG_PDB["src/integrations/peeringdb.py\n(fetch_peeringdb_data)"]
         RIPE_API["API Pública RIPE Atlas (REST HTTPS)"]
+        PDB_API["API Pública PeeringDB (REST HTTPS)"]
     end
 
     %% Relações UI -> Contratos Core
     APP --> UI_NOC
     APP --> UI_REAL
+    APP --> UI_PDB
     UI_NOC --> KPIS
     UI_NOC --> CHART
     UI_NOC --> EVENT
@@ -74,10 +79,14 @@ flowchart TD
     SYNTH --> MODELS
     TOPO --> MODELS
 
-    %% Relações Serviço Externo
-    UI_REAL --> SERVICE
-    SERVICE --> INTEG
-    INTEG --> RIPE_API
+    %% Relações Serviços Externos
+    UI_REAL --> SERVICE_RIPE
+    SERVICE_RIPE --> INTEG_RIPE
+    INTEG_RIPE --> RIPE_API
+
+    UI_PDB --> SERVICE_PDB
+    SERVICE_PDB --> INTEG_PDB
+    INTEG_PDB --> PDB_API
 ```
 
 ---
@@ -148,11 +157,11 @@ O controle de simulação do laboratório é centralizado em `src/simulation_sta
 
 ---
 
-## 6. Integração com a Internet Pública (RIPE Atlas)
+## 6. Integrações com a Internet Pública (Dados Reais)
 
-A camada de dados reais consulta a rede global de sondas do RIPE NCC para contextualizar a conectividade externa da Internet brasileira.
+As integrações públicas contextualizam a infraestrutura externa da Internet no Brasil. **Ambas operam em abas dedicadas e seus dados NÃO indicam incidentes ou falhas operacionais do laboratório.**
 
-### 6.1 Detalhes de Transporte e Segurança
+### 6.1 RIPE Atlas (Sondas de Medição)
 * **Endpoint**: `https://atlas.ripe.net/api/v2/probes/` (`RIPE_ATLAS_BASE_URL`).
 * **Método e Autenticação**: Exclusivamente `GET` público, **sem tokens, sem credenciais e sem APIs pagas**.
 * **Parâmetros da Consulta**:
@@ -166,15 +175,40 @@ A camada de dados reais consulta a rede global de sondas do RIPE NCC para contex
   * Se o tempo total estourar entre páginas, a coleta é interrompida elegantemente e o resultado é marcado com `truncated=True` e `truncated_reason="time_budget"`.
 * **Validação e Privacidade**:
   * Registros sem campos obrigatórios ou com tipos inconsistentes são descartados e contabilizados em `invalid_count`.
-  * Nenhum endereço IP real, rota BGP sensível ou identificador de host é capturado.
+  * Nenhum endereço IP real, rota BGP sensível ou identificador pessoal é capturado.
 * **Recorte Regional de São Paulo (`src/services/real_data_service.py`)**:
-  * Calcula distância geográfica através da fórmula trigonométrica de Haversine:
+  * Calcula distância geográfica através da fórmula de Haversine:
     $$\Delta\sigma = 2 \arcsin\left(\sqrt{\sin^2\left(\frac{\Delta\phi}{2}\right) + \cos(\phi_1)\cos(\phi_2)\sin^2\left(\frac{\Delta\lambda}{2}\right)}\right)$$
-  * Sondas em raio $\le 100\text{ km}$ (`SAO_PAULO_RADIUS_KM = 100`) das coordenadas da capital paulista (`SAO_PAULO_LAT = -23.55`, `SAO_PAULO_LON = -46.63`) são marcadas como `em_sp=True`.
+  * Sondas em raio $\le 100\text{ km}$ (`SAO_PAULO_RADIUS_KM = 100`) das coordenadas da capital (`SAO_PAULO_LAT = -23.55`, `SAO_PAULO_LON = -46.63`) recebem `em_sp=True`.
 * **Estratégia de Cache e Cooldown na UI (`src/ui/real_data.py`)**:
-  * `@st.cache_data(ttl=600)`: Cache de dados válidos por 10 minutos (`RIPE_ATLAS_CACHE_TTL_SECONDS = 600`).
-  * Em caso de falha de conexão, a exceção **não** é armazenada no cache; o sistema exibe a última coleta bem-sucedida (`st.session_state["real_data_last_ok"]`) acompanhada de um banner de aviso de indisponibilidade momentânea (*stale data fallback*).
-  * Cooldown de recarga manual de 60 segundos (`REFRESH_COOLDOWN_SECONDS = 60`) para evitar sobrecarga no serviço público.
+  * `@st.cache_data(ttl=600, show_spinner=False)`: Cache de dados válidos por 10 minutos (`RIPE_ATLAS_CACHE_TTL_SECONDS = 600`).
+  * Em caso de falha de conexão, a exceção **não** é armazenada no cache; o sistema exibe a última coleta bem-sucedida (`st.session_state["real_data_last_ok"]`) acompanhada de um banner de aviso (*stale data fallback*).
+  * Cooldown de recarga manual de 60 segundos (`REFRESH_COOLDOWN_SECONDS = 60`).
+
+### 6.2 PeeringDB (Pontos de Troca de Tráfego e Data Centers)
+* **Endpoints e Métodos**:
+  * `GET https://www.peeringdb.com/api/ix?country=BR` (Pontos de Troca de Tráfego / IXPs).
+  * `GET https://www.peeringdb.com/api/fac?country=BR` (Instalações / Data Centers / Facilities).
+  * URL base: `PEERINGDB_BASE_URL = "https://www.peeringdb.com/api"`.
+  * **Volume**: Exatamente 2 requisições por carga completa.
+  * **Autenticação**: Exclusivamente anônimo, **sem API key, sem tokens e sem custos**.
+* **Tratamento do Parâmetro `fields` e Privacidade (`src/integrations/peeringdb.py`)**:
+  * O parâmetro `fields` é **ignorado pela API pública do PeeringDB** para os endpoints de listagem.
+  * O descarte de qualquer dado de contato ou sensível (`tech_email`, `tech_phone`, `policy_email`, `policy_phone`, `sales_email`, `sales_phone`, `notes`) é realizado **estritamente durante o parse em Python**, garantindo que nenhum dado pessoal chegue aos modelos (`PdbExchange`, `PdbFacility`).
+* **Políticas de Resiliência e Rate Limit**:
+  * Timeout individual por requisição: 10 s (`PEERINGDB_TIMEOUT_SECONDS = 10`).
+  * Orçamento total de tempo: 20 s (`PEERINGDB_TOTAL_BUDGET_SECONDS = 20`).
+  * Tratamento de erro 429 (`HTTPError 429` / Rate Limit) com mensagem amigável em português: `"Limite de requisições do PeeringDB atingido. Tente novamente mais tarde."`.
+  * Validação de envelope `{"data": [...]}`; descarte e contabilização de registros malformados em `invalid_count`.
+  * **Falha Parcial**: Se a consulta de IX funcionar e a de facilities falhar (ou vice-versa), o status é classificado como `UNAVAILABLE` (`RealDataState.UNAVAILABLE`) com mensagem descritiva da falha, evitando estados parciais inconsistentes no dashboard.
+* **Regra Geográfica de São Paulo (`in_sp` em `src/services/real_data_service.py`)**:
+  * Um IX ou Facility é classificado como pertencente a São Paulo (`in_sp=True`) se:
+    1. A cidade normalizada (remoção de acentos via `NFKD` e em minúsculas) for igual a `"sao paulo"`.
+    2. **OU**, para instalações (`PdbFacility`) com coordenadas válidas, a distância de Haversine for $\le 100\text{ km}$ (`SAO_PAULO_RADIUS_KM = 100`) em relação ao centro de São Paulo (`SAO_PAULO_LAT = -23.55`, `SAO_PAULO_LON = -46.63`), abrangendo data centers da Grande São Paulo (ex.: Barueri, Santana de Parnaíba, Tamboré).
+* **Estratégia de Cache e Cooldown na UI (`src/ui/peeringdb.py`)**:
+  * `@st.cache_data(ttl=3600, show_spinner=False)`: Cache de dados válidos por 1 hora (`PEERINGDB_CACHE_TTL_SECONDS = 3600`).
+  * Em caso de falha de conexão, a exceção é levantada internamente na função cacheada para **não cachear o estado indisponível**; a interface preserva a última coleta bem-sucedida em `st.session_state`.
+  * Cooldown de recarga manual de 60 segundos.
 
 ---
 
@@ -193,7 +227,7 @@ A integridade do sistema é garantida por uma bateria automatizada de testes sem
 .\.venv\Scripts\python.exe -m ruff format --check .
 ```
 
-* **Testes Sem Rede**: Todos os testes da integração RIPE Atlas (`tests/test_ripe_atlas.py` e `tests/test_real_data_service.py`) utilizam injeção de dependência via openers customizados (`urllib.request.OpenerDirector`), mocks em memória e relógios injetáveis (`clock: Callable[[], float]`).
+* **Testes Sem Rede**: Todos os testes das integrações públicas (`tests/test_ripe_atlas.py`, `tests/test_peeringdb.py` e `tests/test_real_data_service.py`) utilizam injeção de dependência via openers customizados (`urllib.request.OpenerDirector`), mocks em memória, bloqueio de socket (`socket.socket`) e relógios injetáveis (`clock: Callable[[], float]`).
 * **Testes de Invariantes Estatísticos e SLO**: `tests/test_chart_data.py` valida 200 sementes aleatórias em múltiplas variantes, garantindo formalmente que a latência no cenário normal jamais cruza o limiar de SLO aviso.
 
 ---
@@ -202,7 +236,6 @@ A integridade do sistema é garantida por uma bateria automatizada de testes sem
 
 1. **Fontes Públicas Complementares**:
    * Integração com **RIPEstat API** para telemetria de anúncios BGP, visibilidade de rotas e reputação de ASNs.
-   * Integração com **PeeringDB** para validação de conexões públicas em Pontos de Troca de Tráfego (IX.br / PTT).
 2. **Assistente de Diagnóstico (Adaptador LLM Opcional)**:
    * Interface extensível baseada em provedor abstrato para enriquecer a RCA com sumarizações executivas e sugestões de playbook em linguagem natural, mantendo o motor determinístico como fonte primária da verdade.
 3. **Persistência Histórica e Banco de Dados**:

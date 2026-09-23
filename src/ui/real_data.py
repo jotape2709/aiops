@@ -1,6 +1,7 @@
 import time
 from datetime import datetime
 from math import ceil
+from typing import Protocol, TypeVar, runtime_checkable
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -31,6 +32,17 @@ class RealDataUnavailable(Exception):
         super().__init__(status.message)
 
 
+@runtime_checkable
+class DisplayableStatus(Protocol):
+    """Contrato mínimo de status exibível, servindo RIPE Atlas e PeeringDB."""
+
+    state: RealDataState
+    collected_at: datetime | None
+
+
+StatusT = TypeVar("StatusT", bound=DisplayableStatus)
+
+
 def probes_summary(total_loaded: int, reported_count: int, truncated: bool) -> tuple[str, str]:
     """Rótulo e valor do card de probes, distinguindo carregadas de registradas."""
     if truncated:
@@ -50,14 +62,12 @@ def collected_at_label(collected_at: datetime | None) -> str:
     return f"{collected_at:%d/%m/%Y %H:%M} UTC"
 
 
-def stale_banner(status: RealDataStatus) -> str:
+def stale_banner(status: DisplayableStatus) -> str:
     stamp = "N/D" if status.collected_at is None else f"{status.collected_at:%d/%m %H:%M} UTC"
     return f"Exibindo última coleta bem-sucedida de {stamp} — fonte indisponível agora"
 
 
-def select_display_status(
-    current: RealDataStatus | None, last_ok: RealDataStatus | None
-) -> RealDataStatus | None:
+def select_display_status(current: StatusT | None, last_ok: StatusT | None) -> StatusT | None:
     """Status a exibir: a carga atual quando OK, senão o último OK guardado."""
     if current is not None and current.state == RealDataState.OK:
         return current

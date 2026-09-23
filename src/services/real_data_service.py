@@ -1,4 +1,6 @@
 import logging
+import re
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -7,12 +9,23 @@ from math import asin, cos, radians, sin, sqrt
 from typing import Literal
 
 from src.config import (
+    PEERINGDB_SOURCE_URL,
     RIPE_ATLAS_BASE_URL,
     SAO_PAULO_LAT,
     SAO_PAULO_LON,
     SAO_PAULO_RADIUS_KM,
 )
-from src.integrations.ripe_atlas import AtlasProbe, AtlasResult, fetch_br_probes
+from src.integrations.peeringdb import (
+    PeeringDbError,
+    PeeringDbResult,
+    fetch_peeringdb_data,
+)
+from src.integrations.ripe_atlas import (
+    AtlasProbe,
+    AtlasResult,
+    RipeAtlasError,
+    fetch_br_probes,
+)
 
 
 class RealDataState(str, Enum):
@@ -134,8 +147,8 @@ def get_real_data_status(
             invalid_count=batch.invalid_count,
             truncated_reason=batch.truncated_reason,
         )
-    except Exception as exc:
-        LOGGER.exception("Falha ao carregar dados públicos do RIPE Atlas")
+    except RipeAtlasError as exc:
+        LOGGER.warning("Falha ao carregar dados públicos do RIPE Atlas: %s", exc)
         return RealDataStatus(
             state=RealDataState.UNAVAILABLE,
             message="Dados públicos do RIPE Atlas indisponíveis no momento. Tente atualizar mais tarde.",
@@ -148,4 +161,233 @@ def get_real_data_status(
             reported_count=getattr(exc, "reported_count", 0),
             invalid_count=getattr(exc, "invalid_count", 0),
             truncated_reason=None,
+        )
+    except Exception:
+        LOGGER.exception("Falha inesperada ao carregar dados públicos do RIPE Atlas")
+        return RealDataStatus(
+            state=RealDataState.UNAVAILABLE,
+            message="Dados públicos do RIPE Atlas indisponíveis no momento. Tente atualizar mais tarde.",
+            collected_at=None,
+            source=RIPE_ATLAS_BASE_URL,
+            probes=(),
+            aggregates=None,
+            truncated=False,
+            requests_made=0,
+            reported_count=0,
+            invalid_count=0,
+            truncated_reason=None,
+        )
+
+
+@dataclass(frozen=True)
+class PdbExchange:
+    ix_id: int
+    name: str
+    city: str
+    net_count: int | None
+    fac_count: int | None
+    in_sp: bool
+
+
+@dataclass(frozen=True)
+class PdbFacility:
+    fac_id: int
+    name: str
+    city: str
+    lat: float | None
+    lon: float | None
+    net_count: int | None
+    in_sp: bool
+
+
+@dataclass(frozen=True)
+class PdbAggregates:
+    ix_total: int
+    ix_sp: int
+    fac_total: int
+    fac_sp: int
+    top_exchange: PdbExchange | None
+
+
+@dataclass(frozen=True)
+class PeeringDbStatus:
+    """Status consolidado da consulta à API pública do PeeringDB.
+
+    Invariantes do contrato:
+    - aggregates: presente (PdbAggregates) somente quando state == RealDataState.OK;
+      estritamente None quando state == RealDataState.UNAVAILABLE.
+    - exchanges: tupla de PdbExchange ordenada por net_count decrescente (valores
+      None por último, desempate por nome alfabético ascendente). Vazia quando UNAVAILABLE.
+    - facilities: tupla de PdbFacility com a mesma ordenação de exchanges: ordenada por
+      net_count decrescente (valores None por último, desempate por nome alfabético ascendente).
+      Vazia quando UNAVAILABLE.
+    - city: em PdbExchange e PdbFacility, normalizada para 'N/D' quando vazia ou ausente.
+    - fetched_endpoints: tupla com os endpoints consultados com sucesso (ex. ('ix', 'fac')
+      no sucesso completo, ('ix',) em falha parcial, () em falha total).
+    """
+
+    state: RealDataState
+    message: str
+    collected_at: datetime | None
+    source: str
+    requests_made: int
+    exchanges: tuple[PdbExchange, ...]
+    facilities: tuple[PdbFacility, ...]
+    aggregates: PdbAggregates | None
+    invalid_count: int
+    retry_after_seconds: int | None = None
+    fetched_endpoints: tuple[str, ...] = ()
+
+
+SP_RULE_LABEL: str = f"Cidade = São Paulo ou até {SAO_PAULO_RADIUS_KM} km do centro"
+
+
+def _normalize_city(city: str | None) -> str:
+    """Normaliza o nome da cidade para comparação geográfica.
+
+    Remove sufixos de UF/país após '/', ',' ou ' - ' (ex.: 'São Paulo/SP',
+    'Sao Paulo, SP', 'São Paulo - SP' -> 'sao paulo'), descarta acentos
+    e converte para minúsculas.
+    """
+    if not city:
+        return ""
+    prefix = re.split(r"[/,]|\s+-\s+", city, maxsplit=1)[0]
+    decomposed = unicodedata.normalize("NFKD", prefix)
+    without_accents = "".join(char for char in decomposed if not unicodedata.combining(char))
+    return without_accents.strip().lower()
+
+
+def _is_in_sp(city: str | None, lat: float | None = None, lon: float | None = None) -> bool:
+    """Regra de classificação geográfica de São Paulo.
+
+    Um IXP ou data center é considerado em São Paulo se:
+    1. O nome da cidade (normalizado sem sufixos como '/SP', ', SP', ' - SP', acentos ou caixa)
+       for igual a 'sao paulo'.
+    2. OU, para data centers com coordenadas (lat, lon), a distância de Haversine em relação
+       ao centro de referência de São Paulo for menor ou igual a SAO_PAULO_RADIUS_KM (100 km).
+    """
+    if _normalize_city(city) == "sao paulo":
+        return True
+    if lat is not None and lon is not None:
+        return _within_sp_radius(lat, lon)
+    return False
+
+
+def get_peeringdb_status(
+    fetcher: Callable[[], PeeringDbResult] = fetch_peeringdb_data,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> PeeringDbStatus:
+    try:
+        batch = fetcher()
+        exchanges = tuple(
+            PdbExchange(
+                ix_id=raw.ix_id,
+                name=raw.name,
+                city=raw.city.strip() if raw.city and raw.city.strip() else "N/D",
+                net_count=raw.net_count,
+                fac_count=raw.fac_count,
+                in_sp=_is_in_sp(raw.city),
+            )
+            for raw in batch.exchanges
+        )
+        # Ordenado por net_count desc (None por último), desempate pelo nome asc
+        sorted_exchanges = tuple(
+            sorted(
+                exchanges,
+                key=lambda item: (
+                    1 if item.net_count is None else 0,
+                    -(item.net_count or 0),
+                    item.name,
+                ),
+            )
+        )
+        facilities = tuple(
+            PdbFacility(
+                fac_id=raw.fac_id,
+                name=raw.name,
+                city=raw.city.strip() if raw.city and raw.city.strip() else "N/D",
+                lat=raw.lat,
+                lon=raw.lon,
+                net_count=raw.net_count,
+                in_sp=_is_in_sp(raw.city, raw.lat, raw.lon),
+            )
+            for raw in batch.facilities
+        )
+        # Ordenado com a mesma regra de exchanges: net_count desc, None por último, desempate por nome
+        sorted_facilities = tuple(
+            sorted(
+                facilities,
+                key=lambda item: (
+                    1 if item.net_count is None else 0,
+                    -(item.net_count or 0),
+                    item.name,
+                ),
+            )
+        )
+        top_exchange: PdbExchange | None = None
+        if sorted_exchanges and sorted_exchanges[0].net_count is not None:
+            top_exchange = sorted_exchanges[0]
+
+        aggregates = PdbAggregates(
+            ix_total=len(sorted_exchanges),
+            ix_sp=sum(ix.in_sp for ix in sorted_exchanges),
+            fac_total=len(sorted_facilities),
+            fac_sp=sum(fac.in_sp for fac in sorted_facilities),
+            top_exchange=top_exchange,
+        )
+        message = (
+            f"Carregados {len(sorted_exchanges)} IXPs e "
+            f"{len(sorted_facilities)} data centers do PeeringDB."
+        )
+        return PeeringDbStatus(
+            state=RealDataState.OK,
+            message=message,
+            collected_at=clock(),
+            source=PEERINGDB_SOURCE_URL,
+            requests_made=batch.requests_made,
+            exchanges=sorted_exchanges,
+            facilities=sorted_facilities,
+            aggregates=aggregates,
+            invalid_count=batch.invalid_count,
+            fetched_endpoints=getattr(batch, "fetched_endpoints", ("ix", "fac")),
+        )
+    except PeeringDbError as exc:
+        LOGGER.warning("Falha ao carregar dados públicos do PeeringDB: %s", exc)
+        motivo = (
+            exc.args[0]
+            if exc.args
+            else "Dados públicos do PeeringDB indisponíveis no momento. Tente atualizar mais tarde."
+        )
+        fetched_endpoints = getattr(exc, "fetched_endpoints", ())
+        if "ix" in fetched_endpoints and "fac" not in fetched_endpoints:
+            msg = f"IXPs carregados; data centers falharam: {motivo}"
+        else:
+            msg = motivo
+        return PeeringDbStatus(
+            state=RealDataState.UNAVAILABLE,
+            message=msg,
+            collected_at=None,
+            source=PEERINGDB_SOURCE_URL,
+            requests_made=getattr(exc, "requests_made", 0),
+            exchanges=(),
+            facilities=(),
+            aggregates=None,
+            invalid_count=getattr(exc, "invalid_count", 0),
+            retry_after_seconds=getattr(exc, "retry_after_seconds", None),
+            fetched_endpoints=fetched_endpoints,
+        )
+    except Exception:
+        LOGGER.exception("Falha inesperada ao carregar dados públicos do PeeringDB")
+        return PeeringDbStatus(
+            state=RealDataState.UNAVAILABLE,
+            message="Dados públicos do PeeringDB indisponíveis no momento. Tente atualizar mais tarde.",
+            collected_at=None,
+            source=PEERINGDB_SOURCE_URL,
+            requests_made=0,
+            exchanges=(),
+            facilities=(),
+            aggregates=None,
+            invalid_count=0,
+            retry_after_seconds=None,
+            fetched_endpoints=(),
         )
