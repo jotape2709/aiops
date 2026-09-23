@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from math import asin, cos, radians, sin, sqrt
+from typing import Literal
 
 from src.config import (
     RIPE_ATLAS_BASE_URL,
@@ -64,6 +65,7 @@ class RealDataStatus:
     requests_made: int
     reported_count: int = 0
     invalid_count: int = 0
+    truncated_reason: Literal["max_pages", "time_budget"] | None = None
 
 
 def _within_sp_radius(lat: float | None, lon: float | None) -> bool:
@@ -130,8 +132,9 @@ def get_real_data_status(
             requests_made=batch.requests_made,
             reported_count=batch.reported_count,
             invalid_count=batch.invalid_count,
+            truncated_reason=batch.truncated_reason,
         )
-    except Exception:
+    except Exception as exc:
         LOGGER.exception("Falha ao carregar dados públicos do RIPE Atlas")
         return RealDataStatus(
             state=RealDataState.UNAVAILABLE,
@@ -141,5 +144,8 @@ def get_real_data_status(
             probes=(),
             aggregates=None,
             truncated=False,
-            requests_made=0,
+            requests_made=getattr(exc, "requests_made", 0),
+            reported_count=getattr(exc, "reported_count", 0),
+            invalid_count=getattr(exc, "invalid_count", 0),
+            truncated_reason=None,
         )

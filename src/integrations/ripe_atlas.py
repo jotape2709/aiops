@@ -1,9 +1,10 @@
 import json
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from http.client import HTTPException
 from math import isfinite
-from typing import Any
+from typing import Any, Literal
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -13,6 +14,7 @@ from src.config import (
     RIPE_ATLAS_MAX_PAGES,
     RIPE_ATLAS_PAGE_SIZE,
     RIPE_ATLAS_TIMEOUT_SECONDS,
+    RIPE_ATLAS_TOTAL_BUDGET_SECONDS,
 )
 
 USER_AGENT = "aiops-network-dashboard/0.1 (portfolio lab)"
@@ -21,6 +23,19 @@ FIELDS = "id,status,asn_v4,asn_v6,geometry,is_anchor"
 
 class RipeAtlasError(Exception):
     """Falha de transporte ou resposta inválida da API pública."""
+
+    def __init__(
+        self,
+        message: str = "Falha ao consultar o RIPE Atlas.",
+        *,
+        reported_count: int = 0,
+        invalid_count: int = 0,
+        requests_made: int = 0,
+    ) -> None:
+        super().__init__(message)
+        self.reported_count = reported_count
+        self.invalid_count = invalid_count
+        self.requests_made = requests_made
 
 
 @dataclass(frozen=True)
@@ -41,6 +56,7 @@ class AtlasResult:
     truncated: bool
     requests_made: int
     invalid_count: int = 0
+    truncated_reason: Literal["max_pages", "time_budget"] | None = None
 
 
 Opener = Callable[..., Any]
@@ -107,14 +123,18 @@ def fetch_br_probes(
     page_size: int = RIPE_ATLAS_PAGE_SIZE,
     max_pages: int = RIPE_ATLAS_MAX_PAGES,
     timeout: int = RIPE_ATLAS_TIMEOUT_SECONDS,
+    total_budget: float = RIPE_ATLAS_TOTAL_BUDGET_SECONDS,
+    clock: Callable[[], float] = time.monotonic,
 ) -> AtlasResult:
-    if not 1 <= page_size <= 500 or max_pages < 1 or timeout <= 0:
+    if not 1 <= page_size <= 500 or max_pages < 1 or timeout <= 0 or total_budget <= 0:
         raise ValueError("Configuração de coleta inválida.")
     probes: list[AtlasProbe] = []
     reported_count = 0
     next_page: str | None = None
     requests_made = 0
     invalid_count = 0
+    start_time = clock()
+    budget_exceeded = False
     for page in range(1, max_pages + 1):
         params = {
             "country_code": "BR",
@@ -132,9 +152,19 @@ def fetch_br_probes(
             with opener(request, timeout=timeout) as response:
                 payload = json.load(response)
         except (HTTPError, URLError, HTTPException, TimeoutError, OSError, ValueError) as exc:
-            raise RipeAtlasError("Não foi possível consultar o RIPE Atlas.") from exc
+            raise RipeAtlasError(
+                "Não foi possível consultar o RIPE Atlas.",
+                reported_count=reported_count,
+                invalid_count=invalid_count,
+                requests_made=requests_made,
+            ) from exc
         if not isinstance(payload, dict):
-            raise RipeAtlasError("Resposta inesperada do RIPE Atlas.")
+            raise RipeAtlasError(
+                "Resposta inesperada do RIPE Atlas.",
+                reported_count=reported_count,
+                invalid_count=invalid_count,
+                requests_made=requests_made,
+            )
         results = payload.get("results")
         count = payload.get("count")
         next_page = payload.get("next")
@@ -145,7 +175,12 @@ def fetch_br_probes(
             or count < 0
             or (next_page is not None and not isinstance(next_page, str))
         ):
-            raise RipeAtlasError("Esquema inesperado do RIPE Atlas.")
+            raise RipeAtlasError(
+                "Esquema inesperado do RIPE Atlas.",
+                reported_count=reported_count,
+                invalid_count=invalid_count,
+                requests_made=requests_made,
+            )
         reported_count = count
         for raw in results:
             try:
@@ -154,4 +189,18 @@ def fetch_br_probes(
                 invalid_count += 1
         if not next_page:
             break
-    return AtlasResult(tuple(probes), reported_count, bool(next_page), requests_made, invalid_count)
+        if (clock() - start_time) >= total_budget:
+            budget_exceeded = True
+            break
+    truncated = bool(next_page)
+    truncated_reason: Literal["max_pages", "time_budget"] | None = None
+    if truncated:
+        truncated_reason = "time_budget" if budget_exceeded else "max_pages"
+    return AtlasResult(
+        tuple(probes),
+        reported_count,
+        truncated,
+        requests_made,
+        invalid_count,
+        truncated_reason,
+    )

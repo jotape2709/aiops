@@ -1,4 +1,5 @@
 import time
+from datetime import datetime
 from math import ceil
 
 import pandas as pd
@@ -21,12 +22,57 @@ STATUS_COLORS = {
     "Baixado": "#8292aa",
 }
 REFRESH_COOLDOWN_SECONDS = 60
+_LAST_OK_KEY = "real_data_last_ok"
 
 
 class RealDataUnavailable(Exception):
     def __init__(self, status: RealDataStatus) -> None:
         self.status = status
         super().__init__(status.message)
+
+
+def probes_summary(total_loaded: int, reported_count: int, truncated: bool) -> tuple[str, str]:
+    """Rótulo e valor do card de probes, distinguindo carregadas de registradas."""
+    if truncated:
+        return "Probes carregadas", f"{total_loaded} de {reported_count}"
+    return "Probes registradas", str(reported_count)
+
+
+def unavailable_message(status: RealDataStatus) -> str:
+    if status.reported_count > 0:
+        return f"{status.message} Último total conhecido: {status.reported_count} probes."
+    return status.message
+
+
+def collected_at_label(collected_at: datetime | None) -> str:
+    if collected_at is None:
+        return "N/D"
+    return f"{collected_at:%d/%m/%Y %H:%M} UTC"
+
+
+def stale_banner(status: RealDataStatus) -> str:
+    stamp = "N/D" if status.collected_at is None else f"{status.collected_at:%d/%m %H:%M} UTC"
+    return f"Exibindo última coleta bem-sucedida de {stamp} — fonte indisponível agora"
+
+
+def select_display_status(
+    current: RealDataStatus | None, last_ok: RealDataStatus | None
+) -> RealDataStatus | None:
+    """Status a exibir: a carga atual quando OK, senão o último OK guardado."""
+    if current is not None and current.state == RealDataState.OK:
+        return current
+    return last_ok
+
+
+TRUNCATION_REASONS = {
+    "max_pages": "limite de páginas",
+    "time_budget": "limite de tempo",
+}
+
+
+def truncation_message(status: RealDataStatus) -> str:
+    reason = TRUNCATION_REASONS.get(status.truncated_reason or "", "limite de coleta")
+    return f"{status.message} Motivo: {reason}."
 
 
 @st.cache_data(ttl=RIPE_ATLAS_CACHE_TTL_SECONDS, show_spinner=False)
@@ -112,15 +158,25 @@ def render_real_data() -> None:
     )
     if remaining > 0:
         st.caption(f"Nova atualização disponível em {remaining} s.")
+    current: RealDataStatus | None = None
+    load_error: RealDataStatus | None = None
     try:
         with st.spinner("Consultando RIPE Atlas..."):
-            data = _load_real_data()
+            current = _load_real_data()
     except RealDataUnavailable as exc:
-        st.warning(exc.status.message)
-        st.markdown(f"Fonte: [RIPE Atlas]({exc.status.source})")
+        load_error = exc.status
+    data = select_display_status(current, st.session_state.get(_LAST_OK_KEY))
+    if data is None:
+        if load_error is not None:
+            st.warning(unavailable_message(load_error))
+            st.markdown(f"Fonte: [RIPE Atlas]({load_error.source})")
         return
+    if current is None:
+        st.warning(stale_banner(data))
+    else:
+        st.session_state[_LAST_OK_KEY] = data
     if data.truncated:
-        st.warning(data.message)
+        st.warning(truncation_message(data))
     else:
         st.caption(data.message)
     if data.invalid_count:
@@ -131,10 +187,11 @@ def render_real_data() -> None:
         st.warning("Agregados indisponíveis no momento.")
         return
     columns = st.columns(6)
+    probe_label, probe_value = probes_summary(totals.total_br, data.reported_count, data.truncated)
     for column, label, value in zip(
         columns,
         (
-            "Probes registradas",
+            probe_label,
             "Probes ativas",
             "% conectadas",
             "Anchors",
@@ -142,7 +199,7 @@ def render_real_data() -> None:
             "ASNs distintos (ativas)",
         ),
         (
-            str(totals.total_br),
+            probe_value,
             str(totals.active),
             f"{totals.connected_percent:.1f}%",
             str(totals.anchors),
@@ -178,6 +235,6 @@ def render_real_data() -> None:
         )
         st.dataframe(top_asns, hide_index=True, width="stretch")
     st.caption(
-        f"Coleta: {data.collected_at:%d/%m/%Y %H:%M UTC} · "
+        f"Coleta: {collected_at_label(data.collected_at)} · "
         f"{data.requests_made} requisição(ões) · [Fonte: RIPE Atlas]({data.source})"
     )

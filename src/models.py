@@ -18,9 +18,24 @@ class Status(str, Enum):
     DOWN = "down"
 
 
+STATUS_LABELS_PT: dict[Status, str] = {
+    Status.UP: "Operacional",
+    Status.DEGRADED: "Degradado",
+    Status.DOWN: "Indisponível",
+}
+IMPACTED_LABEL: str = "Impactado"
+
+
 class Severity(str, Enum):
     WARNING = "warning"
     CRITICAL = "critical"
+
+
+SEVERITY_LABELS_PT: dict[Severity, str] = {
+    Severity.CRITICAL: "Crítico",
+    Severity.WARNING: "Aviso",
+}
+INFO_LABEL: str = "Informativo"
 
 
 class Scenario(str, Enum):

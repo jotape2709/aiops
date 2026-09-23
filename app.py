@@ -1,11 +1,16 @@
 import streamlit as st
 
-from src.config import DEFAULT_SEED
+from src.chart_data import latency_data, severity_data, unavailable_link_count, utilization_data
+from src.config import DEFAULT_SEED, DOWN_LINKS_SHOWN
+from src.event_data import event_rows
 from src.kpis import compute_kpis
 from src.models import Scenario
 from src.root_cause import analyze
 from src.simulation_state import change_seed, initial_state, resample, restore, simulate
+from src.ui.badges import render_real_badge, render_simulation_badge
 from src.ui.cards import render_kpis
+from src.ui.charts import latency_figure, severity_figure, utilization_figure
+from src.ui.event_table import render_event_table
 from src.ui.real_data import render_real_data
 from src.ui.root_cause import render_analysis
 from src.ui.theme import apply_theme
@@ -43,7 +48,10 @@ if seed != state.sample.seed:
     st.session_state.sample_index = 0
     state = change_seed(state, seed)
 simulate_clicked = st.sidebar.button("Simular incidente", disabled=choice == state.sample.scenario)
-restore_clicked = st.sidebar.button("Restaurar ambiente")
+restore_clicked = st.sidebar.button(
+    "Restaurar ambiente",
+    disabled=state.sample.scenario == Scenario.NORMAL and not state.active_incidents,
+)
 regenerate_clicked = st.sidebar.button("Gerar nova amostra")
 
 if simulate_clicked:
@@ -70,13 +78,18 @@ noc_tab, real_tab = st.tabs(
 )
 with noc_tab:
     if noc_tab.open:
+        render_simulation_badge()
         st.caption(
             "Laboratório de observabilidade e análise de incidentes com dados 100% sintéticos"
         )
         kpis = compute_kpis(sample)
         render_kpis(
             (
-                ("Disponibilidade", f"{kpis.availability:.1f}%"),
+                (
+                    "Disponibilidade",
+                    f"{kpis.availability:.1f}%",
+                    "equipamentos alcançáveis",
+                ),
                 ("Alertas ativos", str(kpis.active_alerts)),
                 ("Incidentes críticos", str(kpis.critical_incidents)),
                 ("Serviços impactados", str(kpis.impacted_services)),
@@ -86,18 +99,45 @@ with noc_tab:
                 ),
             )
         )
+        if kpis.mean_latency is None:
+            st.caption("Latência média: nenhum serviço alcançável a partir da Internet.")
         st.caption(f"Eventos no histórico: {len(state.history)}")
         analysis = analyze(sample)
         topology_column, analysis_column = st.columns([2, 1])
         with topology_column:
-            st.subheader("Topologia da rede")
+            st.markdown("#### Topologia da rede")
             st.plotly_chart(
-                topology_figure(sample.nodes, sample.links, analysis.component_id),
+                topology_figure(
+                    sample.nodes,
+                    sample.links,
+                    analysis.component_kind,
+                    analysis.component_nodes,
+                ),
                 width="stretch",
             )
         with analysis_column:
             render_analysis(analysis)
 
+        latency_column, utilization_column, severity_column = st.columns(3)
+        with latency_column:
+            st.markdown("#### Latência fim a fim")
+            st.plotly_chart(latency_figure(latency_data(sample)), width="stretch")
+        with utilization_column:
+            st.markdown("#### Utilização de links")
+            st.plotly_chart(utilization_figure(utilization_data(sample.links)), width="stretch")
+            unavailable = unavailable_link_count(sample.links)
+            if unavailable > DOWN_LINKS_SHOWN:
+                st.caption(
+                    f"{unavailable} links indisponíveis; mostrando os {DOWN_LINKS_SHOWN} principais."
+                )
+        with severity_column:
+            st.markdown("#### Incidentes ativos")
+            st.plotly_chart(severity_figure(severity_data(state.active_incidents)), width="stretch")
+
+        st.subheader("Eventos recentes")
+        render_event_table(event_rows(state.history))
+
 with real_tab:
     if real_tab.open:
+        render_real_badge()
         render_real_data()

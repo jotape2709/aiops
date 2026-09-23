@@ -1,8 +1,9 @@
+from dataclasses import dataclass
 from itertools import pairwise
 
 import networkx as nx
 
-from src.models import Link, Node, NodeType, Status
+from src.models import IMPACTED_LABEL, STATUS_LABELS_PT, Link, Node, NodeType, Status
 
 POSITIONS: dict[str, tuple[float, float]] = {
     "INTERNET": (0.0, 6.0),
@@ -143,3 +144,33 @@ def unreachable_from_internet(
         node.id for node in nodes if node.type == NodeType.SERVICE and node.id in unreachable
     }
     return unreachable, services
+
+
+@dataclass(frozen=True)
+class TopologyView:
+    node_states: dict[str, str]
+    link_states: dict[tuple[str, str], str]
+
+
+def topology_view(nodes: tuple[Node, ...], links: tuple[Link, ...]) -> TopologyView:
+    """Calcula os estados operacionais e visuais de nós e enlaces para apresentação na UI."""
+    unreachable, _ = unreachable_from_internet(nodes, links)
+    service_status = affected_services(nodes, links)
+
+    node_states: dict[str, str] = {}
+    for node in nodes:
+        if node.type == NodeType.SERVICE:
+            node_states[node.id] = STATUS_LABELS_PT[service_status[node.id]]
+        elif node.id in unreachable and node.status != Status.DOWN:
+            node_states[node.id] = IMPACTED_LABEL
+        else:
+            node_states[node.id] = STATUS_LABELS_PT[node.status]
+
+    link_states: dict[tuple[str, str], str] = {}
+    for link in links:
+        if link.status != Status.DOWN and {link.source, link.target} <= unreachable:
+            link_states[(link.source, link.target)] = IMPACTED_LABEL
+        else:
+            link_states[(link.source, link.target)] = STATUS_LABELS_PT[link.status]
+
+    return TopologyView(node_states, link_states)

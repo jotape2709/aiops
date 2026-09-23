@@ -4,7 +4,7 @@ from src.root_cause import RootCauseAnalysis
 
 
 def render_analysis(analysis: RootCauseAnalysis) -> None:
-    st.subheader("Análise inteligente / provável causa raiz")
+    st.markdown("#### Causa raiz provável")
     if analysis.root_cause is None:
         st.success("Nenhuma anomalia relevante.")
         return

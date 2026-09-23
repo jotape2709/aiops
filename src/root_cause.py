@@ -1,9 +1,10 @@
 from dataclasses import dataclass
+from typing import Literal
 
 import networkx as nx
 
 from src.config import THRESHOLDS
-from src.models import NodeType, Status
+from src.models import STATUS_LABELS_PT, NodeType, Status
 from src.network_topology import affected_services, build_topology
 from src.synthetic_data import Sample
 
@@ -15,12 +16,13 @@ class RootCauseAnalysis:
     evidences: tuple[str, ...]
     impact: tuple[tuple[str, str], ...]
     actions: tuple[str, ...]
+    component_kind: Literal["node", "link"] | None = None
+    component_nodes: tuple[str, ...] = ()
 
 
 def _impact(sample: Sample) -> tuple[tuple[str, str], ...]:
-    labels = {Status.DOWN: "Indisponível", Status.DEGRADED: "Degradado"}
     return tuple(
-        (service, labels[status])
+        (service, STATUS_LABELS_PT[status])
         for service, status in affected_services(sample.nodes, sample.links).items()
         if status != Status.UP
     )
@@ -62,11 +64,15 @@ def analyze(sample: Sample) -> RootCauseAnalysis:
         )
 
     if not candidates:
-        return RootCauseAnalysis(None, None, (), (), ())
+        return RootCauseAnalysis(None, None, (), (), (), None, ())
     _, _, component_id, kind = min(candidates)
+    component_kind: Literal["node", "link"] = "link" if "--" in component_id else "node"
+    component_nodes = (
+        tuple(component_id.split("--", 1)) if "--" in component_id else (component_id,)
+    )
     impact = _impact(sample)
-    unavailable_count = sum(status == "Indisponível" for _, status in impact)
-    degraded_count = sum(status == "Degradado" for _, status in impact)
+    unavailable_count = sum(status == STATUS_LABELS_PT[Status.DOWN] for _, status in impact)
+    degraded_count = sum(status == STATUS_LABELS_PT[Status.DEGRADED] for _, status in impact)
     if kind == "cpu":
         cause = f"CPU elevada em {component_id}."
         actions = (
@@ -93,4 +99,6 @@ def analyze(sample: Sample) -> RootCauseAnalysis:
         )
         if count
     ) + (f"Componente {component_id} identificado por estado, métricas e posição na topologia.",)
-    return RootCauseAnalysis(cause, component_id, evidences, impact, actions)
+    return RootCauseAnalysis(
+        cause, component_id, evidences, impact, actions, component_kind, component_nodes
+    )

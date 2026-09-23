@@ -7,19 +7,23 @@ def test_normal_has_no_root_cause() -> None:
     analysis = analyze(generate_sample(42))
     assert analysis.root_cause is None
     assert analysis.component_id is None
+    assert analysis.component_kind is None
+    assert analysis.component_nodes == ()
 
 
 def test_each_incident_identifies_component_and_safe_actions() -> None:
     expected = {
-        Scenario.LINK_DEGRADED: "RTR-EDGE-01--FW-CORE-01",
-        Scenario.LINK_DOWN: "SW-CORE-01--SW-ACCESS-01",
-        Scenario.CORE_SWITCH_DOWN: "SW-CORE-01",
-        Scenario.CPU_HIGH: "SRV-API-01",
+        Scenario.LINK_DEGRADED: ("RTR-EDGE-01--FW-CORE-01", "link", ("RTR-EDGE-01", "FW-CORE-01")),
+        Scenario.LINK_DOWN: ("SW-CORE-01--SW-ACCESS-01", "link", ("SW-CORE-01", "SW-ACCESS-01")),
+        Scenario.CORE_SWITCH_DOWN: ("SW-CORE-01", "node", ("SW-CORE-01",)),
+        Scenario.CPU_HIGH: ("SRV-API-01", "node", ("SRV-API-01",)),
     }
     forbidden = ("reload", "erase", "delete", "format", "shutdown")
-    for scenario, component in expected.items():
+    for scenario, (component, kind, nodes) in expected.items():
         analysis = analyze(generate_sample(42, scenario))
         assert analysis.component_id == component
+        assert analysis.component_kind == kind
+        assert analysis.component_nodes == nodes
         assert analysis.root_cause
         assert analysis.evidences and analysis.actions
         assert not any(word in action.lower() for action in analysis.actions for word in forbidden)

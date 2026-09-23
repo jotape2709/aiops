@@ -64,6 +64,7 @@ def test_pagination_stops_at_max_pages(monkeypatch) -> None:
     assert pages == ["1", "2"]
     assert result.requests_made == 2
     assert result.truncated
+    assert result.truncated_reason == "max_pages"
     assert len(result.probes) == 2
 
 
@@ -93,3 +94,48 @@ def test_envelope_and_transport_failures_are_typed(monkeypatch, opener) -> None:
     monkeypatch.setattr(socket, "socket", lambda *args, **kwargs: pytest.fail("network used"))
     with pytest.raises(RipeAtlasError):
         fetch_br_probes(opener=opener)
+
+
+def test_total_budget_stops_between_pages_and_marks_truncated(monkeypatch) -> None:
+    monkeypatch.setattr(socket, "socket", lambda *args, **kwargs: pytest.fail("network used"))
+    times = [0.0, 25.0]  # Start at 0, check between pages at 25.0 (> 20.0 budget)
+    calls = []
+
+    def opener(request, timeout):
+        calls.append(request)
+        return response([probe(1)], next_page="https://atlas.ripe.net/next", count=1000)
+
+    result = fetch_br_probes(
+        opener=opener,
+        page_size=500,
+        max_pages=4,
+        total_budget=20.0,
+        clock=lambda: times.pop(0) if times else 30.0,
+    )
+    assert len(calls) == 1
+    assert result.requests_made == 1
+    assert result.truncated is True
+    assert result.truncated_reason == "time_budget"
+    assert result.reported_count == 1000
+    assert len(result.probes) == 1
+
+
+def test_subsequent_page_failure_preserves_reported_and_invalid_count(monkeypatch) -> None:
+    monkeypatch.setattr(socket, "socket", lambda *args, **kwargs: pytest.fail("network used"))
+    page_count = 0
+
+    def opener(request, timeout):
+        nonlocal page_count
+        page_count += 1
+        if page_count == 1:
+            return response(
+                [probe(1), {"id": 2}], next_page="https://atlas.ripe.net/next", count=1000
+            )
+        raise HTTPError(request.full_url, 500, "server error", {}, None)
+
+    with pytest.raises(RipeAtlasError) as exc_info:
+        fetch_br_probes(opener=opener, page_size=500, max_pages=3)
+
+    assert exc_info.value.reported_count == 1000
+    assert exc_info.value.invalid_count == 1
+    assert exc_info.value.requests_made == 2

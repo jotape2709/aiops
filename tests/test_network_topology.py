@@ -73,4 +73,26 @@ def test_service_visual_state_matches_derived_ecmp_impact() -> None:
     sample = generate_sample(42, Scenario.LINK_DEGRADED)
     figure = topology_figure(sample.nodes, sample.links)
     degraded = next(trace for trace in figure.data if trace.name == "Degradado")
-    assert {"WEB", "DATABASE", "API"} <= set(degraded.text)
+    assert any("WEB" in tooltip for tooltip in degraded.hovertext)
+    assert any("DATABASE" in tooltip for tooltip in degraded.hovertext)
+    assert any("API" in tooltip for tooltip in degraded.hovertext)
+
+
+def test_topology_view_produces_consistent_node_and_link_states() -> None:
+    from src.network_topology import topology_view
+
+    # Cenário Normal: tudo operacional
+    normal_sample = generate_sample(42, Scenario.NORMAL)
+    normal_view = topology_view(normal_sample.nodes, normal_sample.links)
+    assert all(state == "Operacional" for state in normal_view.node_states.values())
+    assert all(state == "Operacional" for state in normal_view.link_states.values())
+
+    # Cenário Core switch down: valida estados
+    core_sample = generate_sample(42, Scenario.CORE_SWITCH_DOWN)
+    core_view = topology_view(core_sample.nodes, core_sample.links)
+    assert core_view.node_states["SW-CORE-01"] == "Indisponível"
+    assert core_view.node_states["WEB"] == "Indisponível"
+    assert core_view.node_states["SW-ACCESS-01"] == "Impactado"
+    assert core_view.link_states[("FW-CORE-01", "SW-CORE-01")] == "Indisponível"
+    assert core_view.link_states[("SW-ACCESS-01", "SW-ACCESS-02")] == "Impactado"
+    assert core_view.link_states[("INTERNET", "RTR-EDGE-01")] == "Operacional"

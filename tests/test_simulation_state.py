@@ -11,8 +11,11 @@ def test_recovery_resolves_incident_and_preserves_history() -> None:
     recovered = restore(active)
     assert recovered.sample.scenario == Scenario.NORMAL
     assert not recovered.active_incidents
-    assert len(recovered.history) == 1
+    assert len(recovered.history) == 2
     assert recovered.history[0].status == "Resolvido"
+    assert recovered.history[1].severity == "Informativo"
+    assert recovered.history[1].description == "Recuperação do ambiente"
+    assert recovered.history[1].service == "—"
     assert initial_state(43).history == ()
 
 
@@ -35,3 +38,8 @@ def test_seed_change_reapplies_active_scenario_and_preserves_history() -> None:
     assert len(changed.history) == 2
     assert changed.history[0].status == "Resolvido"
     assert changed.history[1].status == "Ativo"
+
+
+def test_restore_normal_without_incidents_is_noop() -> None:
+    state = initial_state(42)
+    assert restore(state) is state
