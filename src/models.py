@@ -25,7 +25,10 @@ class Severity(str, Enum):
 
 class Scenario(str, Enum):
     NORMAL = "normal"
+    LINK_DEGRADED = "link_degraded"
+    LINK_DOWN = "link_down"
     CORE_SWITCH_DOWN = "core_switch_down"
+    CPU_HIGH = "cpu_high"
 
 
 @dataclass(frozen=True)
@@ -51,3 +54,4 @@ class Link:
     utilization: float
     latency: float
     capacity_mbps: int
+    packet_loss: float = 0.0

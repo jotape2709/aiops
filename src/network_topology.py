@@ -1,3 +1,5 @@
+from itertools import pairwise
+
 import networkx as nx
 
 from src.models import Link, Node, NodeType, Status
@@ -61,16 +63,80 @@ def build_topology(nodes: tuple[Node, ...], links: tuple[Link, ...]) -> nx.Graph
     return graph
 
 
-def unreachable_from_internet(
-    nodes: tuple[Node, ...], links: tuple[Link, ...]
-) -> tuple[set[str], set[str]]:
+def _active_graph(nodes: tuple[Node, ...], links: tuple[Link, ...]) -> nx.Graph:
     active = nx.Graph()
-    active.add_nodes_from(node.id for node in nodes if node.status != Status.DOWN)
+    active.add_nodes_from(
+        (node.id, {"model": node}) for node in nodes if node.status != Status.DOWN
+    )
     active.add_edges_from(
-        (link.source, link.target)
+        (link.source, link.target, {"model": link})
         for link in links
         if link.status != Status.DOWN and link.source in active and link.target in active
     )
+    return active
+
+
+def affected_services(nodes: tuple[Node, ...], links: tuple[Link, ...]) -> dict[str, Status]:
+    """Classifica serviços pelos caminhos ECMP ativos e pelo aumento de saltos."""
+    active = _active_graph(nodes, links)
+    baseline = build_topology(nodes, links)
+    node_by_id = {node.id: node for node in nodes}
+    result: dict[str, Status] = {}
+    for node in nodes:
+        if node.type != NodeType.SERVICE:
+            continue
+        if (
+            "INTERNET" not in active
+            or node.id not in active
+            or not nx.has_path(active, "INTERNET", node.id)
+        ):
+            result[node.id] = Status.DOWN
+            continue
+        paths = tuple(nx.all_shortest_paths(active, "INTERNET", node.id))
+        rerouted = len(paths[0]) > nx.shortest_path_length(baseline, "INTERNET", node.id) + 1
+        degraded_path = any(
+            any(node_by_id[part].status == Status.DEGRADED for part in path)
+            or any(
+                active.edges[first, second]["model"].status == Status.DEGRADED
+                for first, second in pairwise(path)
+            )
+            for path in paths
+        )
+        result[node.id] = Status.DEGRADED if rerouted or degraded_path else Status.UP
+    return result
+
+
+def mean_service_latency(nodes: tuple[Node, ...], links: tuple[Link, ...]) -> float | None:
+    """Média fim a fim por serviço; cada caminho ECMP recebe o mesmo peso."""
+    active = _active_graph(nodes, links)
+    latencies: list[float] = []
+    for node in nodes:
+        if node.type != NodeType.SERVICE or "INTERNET" not in active or node.id not in active:
+            continue
+        if not nx.has_path(active, "INTERNET", node.id):
+            continue
+        path_latencies = []
+        for path in nx.all_shortest_paths(active, "INTERNET", node.id):
+            server = next(
+                part
+                for part in reversed(path[:-1])
+                if active.nodes[part]["model"].type == NodeType.SERVER
+            )
+            server_latency = active.nodes[server]["model"].latency or 0.0
+            link_latency = sum(
+                active.edges[first, second]["model"].latency
+                + (20.0 if active.edges[first, second]["model"].utilization >= 80 else 0.0)
+                for first, second in pairwise(path)
+            )
+            path_latencies.append(link_latency + server_latency)
+        latencies.append(sum(path_latencies) / len(path_latencies))
+    return sum(latencies) / len(latencies) if latencies else None
+
+
+def unreachable_from_internet(
+    nodes: tuple[Node, ...], links: tuple[Link, ...]
+) -> tuple[set[str], set[str]]:
+    active = _active_graph(nodes, links)
     reachable = nx.node_connected_component(active, "INTERNET") if "INTERNET" in active else set()
     unreachable = {node.id for node in nodes} - reachable
     services = {

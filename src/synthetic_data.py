@@ -1,10 +1,10 @@
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
 from src.config import DEFAULT_SEED
 from src.models import Link, Node, NodeType, Scenario, Status
-from src.network_topology import EDGES, NODE_TYPES, unreachable_from_internet
+from src.network_topology import EDGES, NODE_TYPES, mean_service_latency
 
 
 @dataclass(frozen=True)
@@ -15,6 +15,11 @@ class Sample:
     nodes: tuple[Node, ...]
     links: tuple[Link, ...]
     latency_series: tuple[float, ...]
+    cpu_series: dict[str, tuple[float, ...]] = field(default_factory=dict)
+
+
+def _same_link(link: Link, first: str, second: str) -> bool:
+    return {link.source, link.target} == {first, second}
 
 
 def generate_sample(
@@ -62,28 +67,60 @@ def generate_sample(
             else link
             for link in links
         )
-        unreachable, _ = unreachable_from_internet(nodes, links)
+    elif scenario == Scenario.LINK_DEGRADED:
+        links = tuple(
+            replace(link, status=Status.DEGRADED, latency=90.0, packet_loss=5.0)
+            if _same_link(link, "RTR-EDGE-01", "FW-CORE-01")
+            else replace(link, utilization=82.0)
+            if _same_link(link, "RTR-EDGE-02", "FW-CORE-01")
+            else link
+            for link in links
+        )
+    elif scenario == Scenario.LINK_DOWN:
+        links = tuple(
+            replace(link, status=Status.DOWN, utilization=0.0)
+            if _same_link(link, "SW-CORE-01", "SW-ACCESS-01")
+            else replace(link, utilization=91.0)
+            if _same_link(link, "SW-ACCESS-01", "SW-ACCESS-02")
+            else link
+            for link in links
+        )
+    elif scenario == Scenario.CPU_HIGH:
+        cpu_penalty = float(np.random.default_rng([seed, variant, 1]).uniform(30, 60))
         nodes = tuple(
             replace(
                 node,
-                latency=round(node.latency + 45, 1) if node.latency is not None else None,
-                availability=0.0 if node.id in unreachable else node.availability,
+                cpu=92.0,
+                status=Status.DEGRADED,
+                latency=round((node.latency or 0.0) + cpu_penalty, 1),
             )
-            if node.id in unreachable or node.id == "FW-CORE-01"
+            if node.id == "SRV-API-01"
             else node
             for node in nodes
         )
 
-    unreachable, _ = unreachable_from_internet(nodes, links)
-    reachable_latencies = [
-        node.latency
-        for node in nodes
-        if node.type != NodeType.INTERNET
-        and node.id not in unreachable
-        and node.latency is not None
-    ]
-    base_latency = float(np.mean(reachable_latencies))
-    latency_series = tuple(
-        round(max(0.0, base_latency + float(noise)), 1) for noise in rng.normal(0, 1.2, 60)
+    # Sem serviços alcançáveis, não há observação de latência fim a fim.
+    base_latency = mean_service_latency(nodes, links)
+    latency_rng = np.random.default_rng([seed, variant, 2])
+    latency_series = (
+        tuple(
+            round(max(0.0, base_latency + float(noise)), 1)
+            for noise in latency_rng.normal(0, 1.2, 60)
+        )
+        if base_latency is not None
+        else ()
     )
-    return Sample(scenario, seed, variant, nodes, links, latency_series)
+    cpu_rng = np.random.default_rng([seed, variant, 3])
+    cpu_series = {
+        node.id: tuple(
+            round(float(value), 1)
+            for value in (
+                cpu_rng.uniform(91, 94, 12)
+                if scenario == Scenario.CPU_HIGH and node.id == "SRV-API-01"
+                else cpu_rng.uniform(max(0.0, (node.cpu or 0.0) - 2), (node.cpu or 0.0) + 2, 12)
+            )
+        )
+        for node in nodes
+        if node.type not in {NodeType.INTERNET, NodeType.SERVICE}
+    }
+    return Sample(scenario, seed, variant, nodes, links, latency_series, cpu_series)

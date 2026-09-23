@@ -11,6 +11,8 @@ THRESHOLDS = {
     "cpu": (85.0, 95.0),
     "memory": (85.0, 95.0),
 }
+CPU_HIGH_THRESHOLD = 90.0
+CPU_PERSISTENCE_POINTS = 6
 
 RIPE_ATLAS_BASE_URL = "https://atlas.ripe.net/api/v2/probes/"
 RIPE_ATLAS_TIMEOUT_SECONDS = 10

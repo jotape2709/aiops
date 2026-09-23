@@ -19,4 +19,4 @@ def test_core_down_kpis() -> None:
     assert kpis.availability < 100.0
     assert kpis.critical_incidents == 1
     assert kpis.impacted_services == 3
-    assert kpis.mean_latency > compute_kpis(generate_sample(42)).mean_latency
+    assert kpis.mean_latency is None  # Nenhum serviço alcançável produz medição fim a fim.

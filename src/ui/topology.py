@@ -1,7 +1,7 @@
 import plotly.graph_objects as go
 
 from src.models import Link, Node, NodeType, Status
-from src.network_topology import POSITIONS, unreachable_from_internet
+from src.network_topology import POSITIONS, affected_services, unreachable_from_internet
 
 COLORS = {
     "Operacional": "#33d6a6",
@@ -41,26 +41,35 @@ def _node_tooltip(node: Node, visual_status: str) -> str:
     return "<br>".join(lines)
 
 
-def topology_figure(nodes: tuple[Node, ...], links: tuple[Link, ...]) -> go.Figure:
+def topology_figure(
+    nodes: tuple[Node, ...], links: tuple[Link, ...], root_component: str | None = None
+) -> go.Figure:
     unreachable, _ = unreachable_from_internet(nodes, links)
+    service_status = affected_services(nodes, links)
     figure = go.Figure()
     for link in links:
         x0, y0 = POSITIONS[link.source]
         x1, y1 = POSITIONS[link.target]
         label = STATUS_LABELS[link.status]
+        is_root = root_component == f"{link.source}--{link.target}"
         figure.add_trace(
             go.Scatter(
                 x=[x0, x1],
                 y=[y0, y1],
                 mode="lines",
                 line={
-                    "color": COLORS[label],
-                    "width": 2.5,
+                    "color": "#ff365a"
+                    if is_root and link.status == Status.DOWN
+                    else "#c38bff"
+                    if is_root
+                    else COLORS[label],
+                    "width": 4 if is_root else 2.5,
                     "dash": "dash" if link.status == Status.DOWN else "solid",
                 },
                 text=(
                     f"{link.source} ↔ {link.target}<br>Estado: {label}<br>"
                     f"Utilização: {link.utilization:.1f}%<br>Latência: {link.latency:.1f} ms"
+                    f"<br>Perda: {link.packet_loss:.1f}%"
                 ),
                 hoverinfo="text",
                 showlegend=False,
@@ -71,7 +80,9 @@ def topology_figure(nodes: tuple[Node, ...], links: tuple[Link, ...]) -> go.Figu
             node
             for node in nodes
             if (
-                "Impactado"
+                STATUS_LABELS[service_status[node.id]]
+                if node.type == NodeType.SERVICE
+                else "Impactado"
                 if node.id in unreachable and node.status != Status.DOWN
                 else STATUS_LABELS[node.status]
             )
@@ -88,9 +99,15 @@ def topology_figure(nodes: tuple[Node, ...], links: tuple[Link, ...]) -> go.Figu
                 textposition="top center",
                 textfont={"color": "#eaf4ff", "size": 10},
                 marker={
-                    "size": 17,
+                    "size": [23 if node.id == root_component else 17 for node in selected],
                     "color": color,
-                    "line": {"color": "#0b1020", "width": 2},
+                    "line": {
+                        "color": [
+                            "#c38bff" if node.id == root_component else "#0b1020"
+                            for node in selected
+                        ],
+                        "width": [3 if node.id == root_component else 2 for node in selected],
+                    },
                 },
                 hovertext=[_node_tooltip(node, label) for node in selected],
                 hovertemplate="%{hovertext}<extra></extra>",
