@@ -93,6 +93,6 @@ codex
 
 Confirme que ambos conseguem abrir na pasta e enxergar os arquivos do projeto.
 
-## Observação para notebook de trabalho
+## Observação sobre dados
 
-Use somente dados sintéticos e respeite as políticas de software da empresa. Este projeto foi especificado para não inspecionar a rede real, não executar scans e não usar dados internos.
+O laboratório usa somente dados sintéticos. O projeto foi especificado para não inspecionar a rede real da máquina, não executar scans e consultar apenas APIs públicas via GET.
