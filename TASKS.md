@@ -61,7 +61,7 @@ Premissas: impacto por ECMP (caminhos mínimos por saltos) + reroute + servidor 
 **M4 ✅ concluído (2026-09-23):** README.md, docs/architecture.md, docs/linkedin.md, assets/.gitkeep. QA final (Antigravity) aprovou todos os critérios da seção 17 e da seção 15; tabela de cenários do README conferida contra `compute_kpis` (seed 42).
 
 **Pendências humanas (não bloqueiam o MVP):**
-- gerar screenshots em `assets/` (instruções no README);
+- ~~gerar screenshots em `assets/`~~ — 5 capturas geradas pelo Portal em 2026-09-24;
 - reprodução em venv limpo não executada pelo Lead: o caminho temporário excede o limite de caminho do Windows (long paths desativado);
 - publicação: M1–M4 publicados em `origin/main` (fa8ce68) em 2026-09-23;
 - escolher licença (README: "A definir").
@@ -95,7 +95,7 @@ Backlog herdado do QA do M3:
 
 GET público anônimo em `/api/ix?country=BR` e `/api/fac?country=BR` (máx. 2 requisições, 2 s entre elas), sem API key; contatos descartados no parse. 429 respeita `Retry-After` (sem retry automático; cooldown da UI = máx(60 s, Retry-After)); falha parcial explícita via `fetched_endpoints`; cache de 1 h sem cachear falha; regra SP por cidade normalizada (sufixo de UF ignorado) ou Haversine 100 km.
 Validação: revisão cruzada Antigravity↔OpenCode, 128 testes, smoke AppTest com fetcher injetado, Portal (NOC/RIPE) e uma carga real controlada pelo Lead: 53 IXPs, 366 data centers (91 em SP), maior IXP IX.br São Paulo (1859 redes). A carga real revelou o bug `"São Paulo/SP"` fora de SP, corrigido e coberto por teste.
-Pendência humana: screenshot `assets/peeringdb.png`.
+Screenshot `assets/peeringdb.png` gerado em 2026-09-24.
 
 Backlog aberto (baixo, pós-MVP):
 - coluna `incident_id` clicável ligando evento → incidente → RCA;
@@ -107,10 +107,11 @@ Backlog aberto (baixo, pós-MVP):
 
 GET público em `stat.ripe.net/data/routing-status` (com `sourceapp`), um por ASN institucional: NIC.br AS22548, FAPESP/ANSP AS1251, RNP AS1916. Intervalo de 1 s, timeout 10 s, orçamento 20 s; erro de um ASN isolado em `failed_asns` (só 429/orçamento interrompem); estados OK/PARTIAL/UNAVAILABLE; cache no serviço (OK 900 s, PARTIAL 300 s, falha nunca), sem `st.cache_data` na UI; cooldown max(60 s, Retry-After). Quarta aba com KPIs, tabela por ASN e legenda neutra ("Sem anúncios observados" para 0%).
 Validação: revisão cruzada Antigravity↔OpenCode (M6.1 corrigiu linguagem de erro, isolamento por ASN, retorno precoce da UI, seeing > total), 173 testes, Ruff, e carga real controlada pelo Lead. A carga real revelou que o AS26162 (route servers do IX.br) não anuncia rotas desde 2015 e parecia "0% — fora do ar"; foi trocado pelo AS1251. Numa das cargas o AS1251 não respondeu e a aba ficou PARTIAL com os outros 2 ASNs (isolamento funcionando); na repetição, os 3 vieram OK.
-Pendência humana: screenshot `assets/ripestat.png`.
+Screenshot `assets/ripestat.png` gerado em 2026-09-24.
 
 Backlog do M6 (baixo):
 - registrar em log o motivo da falha de cada ASN (hoje só entra em `failed_asns`);
 - orçamento não reserva a duração da próxima requisição (pode passar até +10 s);
+- datas da tabela RIPEstat em ISO cru (`2026-09-24T08:00:00`); formatar como no restante da UI;
 - teto para `Retry-After` (vale também para o PeeringDB);
 - `PARTIAL` latente nas abas Atlas/PeeringDB (`select_display_status`/`_load_*` só tratam OK/UNAVAILABLE; inalcançável hoje).

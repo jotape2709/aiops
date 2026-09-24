@@ -81,7 +81,15 @@ Todos os valores abaixo foram medidos com **seed 42, variante 0**, via `compute_
 
 ## Screenshots
 
-Seção preparada — os PNGs ainda não estão no repositório (a pasta é mantida versionada por `assets/.gitkeep`). Para gerar:
+Capturas de 24/09/2026 (seed `42`, 1920x1080):
+
+![Laboratório NOC — cenário Normal](assets/noc-normal.png)
+![Laboratório NOC — Core switch down com RCA](assets/noc-core-down.png)
+![RIPE Atlas — probes no Brasil](assets/ripe-atlas.png)
+![PeeringDB — IXPs e data centers](assets/peeringdb.png)
+![RIPEstat — visibilidade BGP por ASN](assets/ripestat.png)
+
+Para regenerar:
 
 1. Rode `streamlit run app.py` com a seed padrão `42` e viewport de **1920x1080**.
 2. Capture a aba *Laboratório NOC (sintético)* no estado **Normal** (use **Restaurar ambiente** se houver falha ativa) e salve como `assets/noc-normal.png`.
@@ -92,11 +100,11 @@ Seção preparada — os PNGs ainda não estão no repositório (a pasta é mant
 
 | Arquivo | Cenário | Estado |
 | --- | --- | --- |
-| `assets/noc-normal.png` | Normal | a gerar |
-| `assets/noc-core-down.png` | Core switch down | a gerar |
-| `assets/ripe-atlas.png` | Aba RIPE Atlas | a gerar |
-| `assets/peeringdb.png` | Aba PeeringDB | a gerar |
-| `assets/ripestat.png` | Aba RIPEstat | a gerar |
+| `assets/noc-normal.png` | Normal | gerado |
+| `assets/noc-core-down.png` | Core switch down | gerado |
+| `assets/ripe-atlas.png` | Aba RIPE Atlas | gerado |
+| `assets/peeringdb.png` | Aba PeeringDB | gerado |
+| `assets/ripestat.png` | Aba RIPEstat | gerado |
 
 ## Roadmap / V2
 
