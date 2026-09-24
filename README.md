@@ -81,7 +81,7 @@ Todos os valores abaixo foram medidos com **seed 42, variante 0**, via `compute_
 
 ## Screenshots
 
-Capturas de 24/09/2026 (seed `42`, 1920x1080):
+Capturas de 24/09/2026 (seed `42`, viewport 1600x900):
 
 ![Laboratório NOC — cenário Normal](assets/noc-normal.png)
 ![Laboratório NOC — Core switch down com RCA](assets/noc-core-down.png)
