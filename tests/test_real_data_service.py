@@ -335,3 +335,408 @@ def test_sp_city_normalization_and_geographic_classification() -> None:
     assert status.exchanges[1].city == "São Paulo de Olivença/AM"
     assert status.aggregates is not None
     assert status.aggregates.ix_sp == 1
+
+
+# ---------------------------------------------------------------------------
+# Testes do serviço RIPEstat
+# ---------------------------------------------------------------------------
+
+from src.config import RIPESTAT_SOURCE_URL
+from src.integrations.ripestat import (
+    RipeStatError,
+    RipeStatRawRecord,
+    RipeStatRawVisibility,
+    RipeStatResult,
+)
+from src.services.real_data_service import (
+    clear_ripestat_cache,
+    get_ripestat_status,
+)
+
+
+@pytest.fixture(autouse=True)
+def _reset_ripestat_cache():
+    clear_ripestat_cache()
+    yield
+    clear_ripestat_cache()
+
+
+def sample_ripestat_raw_records() -> tuple[RipeStatRawRecord, ...]:
+    return (
+        RipeStatRawRecord(
+            asn="AS22548",
+            name="NIC.br",
+            visibility=RipeStatRawVisibility(
+                v4_seeing=323, v4_total=325, v6_seeing=317, v6_total=317
+            ),
+            v4_prefixes=1,
+            v6_prefixes=1,
+            first_seen="2002-03-01T16:00:00",
+            last_seen="2026-09-24T08:00:00",
+            query_time="2026-09-24T08:00:00",
+        ),
+        RipeStatRawRecord(
+            asn="AS1251",
+            name="FAPESP / ANSP",
+            visibility=RipeStatRawVisibility(
+                v4_seeing=320, v4_total=325, v6_seeing=310, v6_total=317
+            ),
+            v4_prefixes=2,
+            v6_prefixes=2,
+            first_seen="2005-01-01T00:00:00",
+            last_seen="2026-09-24T08:00:00",
+            query_time="2026-09-24T08:00:00",
+        ),
+        RipeStatRawRecord(
+            asn="AS1916",
+            name="RNP",
+            visibility=RipeStatRawVisibility(
+                v4_seeing=325, v4_total=325, v6_seeing=317, v6_total=317
+            ),
+            v4_prefixes=5,
+            v6_prefixes=4,
+            first_seen="2000-01-01T00:00:00",
+            last_seen="2026-09-24T08:00:00",
+            query_time="2026-09-24T08:00:00",
+        ),
+    )
+
+
+def test_ripestat_success_status() -> None:
+    raw_records = sample_ripestat_raw_records()
+    sample = RipeStatResult(
+        records=raw_records,
+        requests_made=3,
+        invalid_count=0,
+        fetched_asns=("AS22548", "AS1251", "AS1916"),
+        failed_asns=(),
+    )
+    status = get_ripestat_status(fetcher=lambda: sample)
+    assert status.state == RealDataState.OK
+    assert "carregados" in status.message.lower()
+    assert status.collected_at is not None
+    assert status.source == RIPESTAT_SOURCE_URL
+    assert status.requests_made == 3
+    assert len(status.records) == 3
+    assert status.fetched_asns == ("AS22548", "AS1251", "AS1916")
+    assert status.failed_asns == ()
+
+    # Normalização e cálculo de percentuais
+    rec0 = status.records[0]
+    assert rec0.asn == "AS22548"
+    assert rec0.name == "NIC.br"
+    assert rec0.v4_visibility_pct == 99.38
+    assert rec0.v6_visibility_pct == 100.0
+
+    # Agregados com contagem de no_visibility
+    assert status.aggregates is not None
+    assert status.aggregates.total_monitored == 3
+    assert status.aggregates.v4_full_visibility_count == 2  # 99.38% e 100.0% >= 99%
+    assert status.aggregates.v6_full_visibility_count == 2  # 100.0% e 100.0% >= 99%
+    assert status.aggregates.v4_partial_visibility_count == 1  # 98.46%
+    assert status.aggregates.v6_partial_visibility_count == 1  # 97.79%
+    assert status.aggregates.v4_no_visibility_count == 0
+    assert status.aggregates.v6_no_visibility_count == 0
+    assert status.aggregates.total_v4_prefixes == 8
+    assert status.aggregates.total_v6_prefixes == 7
+
+
+def test_ripestat_aggregates_no_visibility_and_none_handling() -> None:
+    records = (
+        RipeStatRawRecord(
+            asn="AS1",
+            name="Zero ASN",
+            visibility=RipeStatRawVisibility(v4_seeing=0, v4_total=100, v6_seeing=0, v6_total=100),
+            v4_prefixes=0,
+            v6_prefixes=0,
+            first_seen=None,
+            last_seen=None,
+            query_time=None,
+        ),
+        RipeStatRawRecord(
+            asn="AS2",
+            name="None ASN",
+            visibility=RipeStatRawVisibility(v4_seeing=None, v4_total=100, v6_seeing=100, v6_total=None),
+            v4_prefixes=1,
+            v6_prefixes=1,
+            first_seen=None,
+            last_seen=None,
+            query_time=None,
+        ),
+    )
+    sample = RipeStatResult(records=records, requests_made=2, fetched_asns=("AS1", "AS2"))
+    status = get_ripestat_status(fetcher=lambda: sample)
+    assert status.aggregates is not None
+    # AS1 tem pct == 0.0 -> entra em no_visibility
+    assert status.aggregates.v4_no_visibility_count == 1
+    assert status.aggregates.v6_no_visibility_count == 1
+    # AS2 tem pct None -> NÃO entra em nenhum balde
+    assert status.aggregates.v4_full_visibility_count == 0
+    assert status.aggregates.v4_partial_visibility_count == 0
+    assert status.aggregates.v6_full_visibility_count == 0
+
+
+def test_ripestat_partial_status_via_result_and_exception() -> None:
+    raw_records = sample_ripestat_raw_records()[:1]
+
+    # Caso 1: RipeStatResult com falha parcial
+    sample_partial = RipeStatResult(
+        records=raw_records,
+        requests_made=3,
+        invalid_count=0,
+        fetched_asns=("AS22548",),
+        failed_asns=("AS1251", "AS1916"),
+    )
+    status1 = get_ripestat_status(fetcher=lambda: sample_partial)
+    assert status1.state == RealDataState.PARTIAL
+    assert status1.collected_at is not None
+    assert len(status1.records) == 1
+    assert status1.aggregates is not None
+    assert status1.fetched_asns == ("AS22548",)
+    assert status1.failed_asns == ("AS1251", "AS1916")
+    assert "Visibilidade obtida para 1 de 3" in status1.message
+
+    clear_ripestat_cache()
+
+    # Caso 2: RipeStatError com registros prévios preservados
+    def fail_with_partial():
+        raise RipeStatError(
+            "Não foi possível consultar o RIPEstat para AS1251 (HTTP 503).",
+            status_code=503,
+            requests_made=2,
+            fetched_asns=("AS22548",),
+            failed_asns=("AS1251", "AS1916"),
+            records=raw_records,
+        )
+
+    status2 = get_ripestat_status(fetcher=fail_with_partial)
+    assert status2.state == RealDataState.PARTIAL
+    assert status2.collected_at is not None
+    assert len(status2.records) == 1
+    assert status2.aggregates is not None
+    assert "Visibilidade obtida para 1 de 3" in status2.message
+
+
+def test_ripestat_429_in_middle_propagates_retry_after() -> None:
+    raw_records = sample_ripestat_raw_records()[:1]
+    sample = RipeStatResult(
+        records=raw_records,
+        requests_made=2,
+        fetched_asns=("AS22548",),
+        failed_asns=("AS1251", "AS1916"),
+        retry_after_seconds=60,
+    )
+    status = get_ripestat_status(fetcher=lambda: sample)
+    assert status.state == RealDataState.PARTIAL
+    assert status.retry_after_seconds == 60
+
+
+def test_ripestat_unavailable_status() -> None:
+    def fail_total():
+        raise RipeStatError(
+            "Não foi possível consultar o RIPEstat.",
+            status_code=None,
+            requests_made=1,
+            fetched_asns=(),
+            failed_asns=("AS22548", "AS1251", "AS1916"),
+            records=(),
+        )
+
+    status = get_ripestat_status(fetcher=fail_total)
+    assert status.state == RealDataState.UNAVAILABLE
+    assert status.collected_at is None
+    assert status.aggregates is None
+    assert status.records == ()
+    assert status.fetched_asns == ()
+    assert "indisponíveis" in status.message
+
+
+def test_ripestat_429_propagates_retry_after() -> None:
+    def fail_429():
+        raise RipeStatError(
+            "Limite de requisições do RIPEstat atingido.",
+            status_code=429,
+            requests_made=1,
+            retry_after_seconds=60,
+            fetched_asns=(),
+            failed_asns=("AS22548", "AS1251", "AS1916"),
+            records=(),
+        )
+
+    status = get_ripestat_status(fetcher=fail_429)
+    assert status.state == RealDataState.UNAVAILABLE
+    assert status.retry_after_seconds == 60
+    assert "tente novamente em ~1 min" in status.message
+
+
+def test_ripestat_unexpected_exception_handled() -> None:
+    def crash():
+        raise RuntimeError("unexpected fatal crash")
+
+    status = get_ripestat_status(fetcher=crash)
+    assert status.state == RealDataState.UNAVAILABLE
+    assert status.collected_at is None
+    assert status.aggregates is None
+    assert "indisponíveis" in status.message
+
+
+def test_ripestat_logging_distinguishes_expected_vs_unexpected(caplog) -> None:
+    with caplog.at_level(logging.DEBUG):
+        get_ripestat_status(
+            fetcher=lambda: (_ for _ in ()).throw(
+                RipeStatError("erro esperado", retry_after_seconds=30)
+            )
+        )
+        assert any(
+            r.levelno == logging.WARNING
+            and "Consulta ao RIPEstat não concluída" in r.message
+            for r in caplog.records
+        )
+        assert not any(r.levelno == logging.ERROR for r in caplog.records)
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        get_ripestat_status(
+            fetcher=lambda: (_ for _ in ()).throw(RuntimeError("crash inesperado"))
+        )
+        assert any(
+            r.levelno == logging.ERROR
+            and "Falha inesperada ao carregar dados públicos do RIPEstat" in r.message
+            for r in caplog.records
+        )
+
+
+def test_ripestat_cache_ttl_and_partial_and_unavailable() -> None:
+    calls = 0
+    now_monotonic = 1000.0
+    mode = "ok"
+
+    def mock_fetcher():
+        nonlocal calls
+        calls += 1
+        if mode == "ok":
+            return RipeStatResult(
+                records=sample_ripestat_raw_records(),
+                requests_made=3,
+                fetched_asns=("AS22548", "AS1251", "AS1916"),
+                failed_asns=(),
+            )
+        if mode == "partial":
+            return RipeStatResult(
+                records=sample_ripestat_raw_records()[:1],
+                requests_made=3,
+                fetched_asns=("AS22548",),
+                failed_asns=("AS1251", "AS1916"),
+            )
+        raise RipeStatError(
+            "Indisponível",
+            requests_made=1,
+            fetched_asns=(),
+            failed_asns=("AS22548",),
+        )
+
+    # 1. OK cacheado por 900 s
+    s1 = get_ripestat_status(fetcher=mock_fetcher, monotonic_clock=lambda: now_monotonic)
+    assert s1.state == RealDataState.OK
+    assert calls == 1
+
+    # Dentro de 900 s -> usa cache
+    s2 = get_ripestat_status(fetcher=mock_fetcher, monotonic_clock=lambda: now_monotonic + 500.0)
+    assert s2.state == RealDataState.OK
+    assert calls == 1
+
+    # ignore_cache força consulta mesmo dentro do TTL
+    s_forced = get_ripestat_status(
+        fetcher=mock_fetcher,
+        monotonic_clock=lambda: now_monotonic + 500.0,
+        ignore_cache=True,
+    )
+    assert s_forced.state == RealDataState.OK
+    assert calls == 2
+
+    # Após 900 s (ex: 901 s após s_forced a 1401 s) -> expira
+    s3 = get_ripestat_status(fetcher=mock_fetcher, monotonic_clock=lambda: now_monotonic + 1402.0)
+    assert s3.state == RealDataState.OK
+    assert calls == 3
+
+    # 2. PARTIAL cacheado por 300 s
+    mode = "partial"
+    clear_ripestat_cache()
+    p1 = get_ripestat_status(fetcher=mock_fetcher, monotonic_clock=lambda: now_monotonic + 2000.0)
+    assert p1.state == RealDataState.PARTIAL
+    assert calls == 4
+
+    # Dentro de 300 s (ex: +200 s) -> usa cache
+    p2 = get_ripestat_status(fetcher=mock_fetcher, monotonic_clock=lambda: now_monotonic + 2200.0)
+    assert p2.state == RealDataState.PARTIAL
+    assert calls == 4
+
+    # Após 300 s (ex: +301 s) -> expira PARTIAL
+    p3 = get_ripestat_status(fetcher=mock_fetcher, monotonic_clock=lambda: now_monotonic + 2301.0)
+    assert p3.state == RealDataState.PARTIAL
+    assert calls == 5
+
+    # 3. UNAVAILABLE nunca é cacheado
+    mode = "unavailable"
+    clear_ripestat_cache()
+    u1 = get_ripestat_status(fetcher=mock_fetcher, monotonic_clock=lambda: now_monotonic + 3000.0)
+    assert u1.state == RealDataState.UNAVAILABLE
+    assert calls == 6
+
+    u2 = get_ripestat_status(fetcher=mock_fetcher, monotonic_clock=lambda: now_monotonic + 3001.0)
+    assert u2.state == RealDataState.UNAVAILABLE
+    assert calls == 7
+
+
+def test_ripestat_seeing_greater_than_total_normalizes_to_none() -> None:
+    records = (
+        RipeStatRawRecord(
+            asn="AS22548",
+            name="NIC.br",
+            visibility=RipeStatRawVisibility(v4_seeing=350, v4_total=325, v6_seeing=100, v6_total=100),
+            v4_prefixes=1,
+            v6_prefixes=1,
+            first_seen=None,
+            last_seen=None,
+            query_time=None,
+        ),
+    )
+    sample = RipeStatResult(records=records, requests_made=1, fetched_asns=("AS22548",))
+    status = get_ripestat_status(fetcher=lambda: sample)
+    assert status.records[0].v4_visibility_pct is None
+    assert status.records[0].v6_visibility_pct == 100.0
+
+
+def test_ripestat_prohibited_words_across_all_states() -> None:
+    prohibited = ("incidente", "queda", "falha", "fora do ar")
+
+    # 1. OK
+    sample_ok = RipeStatResult(
+        records=sample_ripestat_raw_records(),
+        requests_made=3,
+        fetched_asns=("AS22548", "AS1251", "AS1916"),
+        failed_asns=(),
+    )
+    status_ok = get_ripestat_status(fetcher=lambda: sample_ok)
+    for w in prohibited:
+        assert w not in status_ok.message.lower()
+
+    # 2. PARTIAL
+    sample_partial = RipeStatResult(
+        records=sample_ripestat_raw_records()[:1],
+        requests_made=3,
+        fetched_asns=("AS22548",),
+        failed_asns=("AS1251", "AS1916"),
+    )
+    clear_ripestat_cache()
+    status_partial = get_ripestat_status(fetcher=lambda: sample_partial)
+    for w in prohibited:
+        assert w not in status_partial.message.lower()
+
+    # 3. UNAVAILABLE
+    clear_ripestat_cache()
+    status_unavailable = get_ripestat_status(
+        fetcher=lambda: (_ for _ in ()).throw(RipeStatError())
+    )
+    for w in prohibited:
+        assert w not in status_unavailable.message.lower()

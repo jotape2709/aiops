@@ -4,7 +4,7 @@ Laboratório local de observabilidade e análise de incidentes de rede: gera tel
 
 **Python 3.11+ · Streamlit · Dados sintéticos**
 
-> **AVISO — origem dos dados:** este é um laboratório NOC **100% sintético**. Os endereços IP são faixas de documentação (RFC 5737, ex.: `192.0.2.0/24`), não há dados de empresa, não há inspeção da rede real da máquina nem scan de rede, e nenhuma credencial ou API paga é necessária. As abas **RIPE Atlas** e **PeeringDB** consultam somente dados **públicos reais, somente-leitura** via GET anônimo, sem API key; os contatos técnicos eventualmente presentes nas respostas são descartados e não são exibidos. Eles descrevem a distribuição de sondas de medição da Internet brasileira e a infraestrutura de interconexão (IXPs e data centers) e **não indicam incidentes de operadoras** nem falhas do laboratório.
+> **AVISO — origem dos dados:** este é um laboratório NOC **100% sintético**. Os endereços IP são faixas de documentação (RFC 5737, ex.: `192.0.2.0/24`), não há dados de empresa, não há inspeção da rede real da máquina nem scan de rede, e nenhuma credencial ou API paga é necessária. As abas **RIPE Atlas**, **PeeringDB** e **RIPEstat** consultam somente dados **públicos reais, somente-leitura** via GET anônimo, sem API key; os contatos técnicos eventualmente presentes nas respostas são descartados e não são exibidos. Eles descrevem a distribuição de sondas de medição da Internet brasileira, a infraestrutura de interconexão (IXPs e data centers) e a visibilidade BGP pública de ASNs institucionais, e **não indicam incidentes de operadoras** nem falhas do laboratório.
 
 ## Funcionalidades
 
@@ -17,6 +17,7 @@ Laboratório local de observabilidade e análise de incidentes de rede: gera tel
 - **Seed reproduzível** (padrão `42`): mesma semente + mesmo cenário ⇒ mesmos números.
 - **Aba RIPE Atlas**: sondas públicas reais do Brasil, com recorte da região de São Paulo (raio de 100 km).
 - **Aba PeeringDB** (terceira aba): IXPs e data centers públicos do Brasil com destaque para São Paulo — dados públicos de infraestrutura que **não indicam incidentes** nem desempenho de operadoras. Como exemplo datado da carga real feita em **23/09/2026** (os números variam): `53` IXPs no Brasil, `366` data centers (`91` em SP) e maior IXP `IX.br (PTT.br) São Paulo` com `1859` redes conectadas.
+- **Aba RIPEstat** (quarta aba): visibilidade BGP pública, observada pelos coletores RIS, de três ASNs institucionais brasileiros — NIC.br (AS22548), FAPESP/ANSP (AS1251) e RNP (AS1916) — com % de peers RIS que enxergam as rotas (IPv4/IPv6) e prefixos anunciados. Visibilidade abaixo de 100% é comum e **não indica problema operacional**. Exemplo datado da carga real de **24/09/2026**: NIC.br e RNP 99,4% (v4) / 100% (v6), FAPESP/ANSP 100% / 100%; 269 prefixos IPv4 somados.
 
 ## Arquitetura (resumida)
 
@@ -25,7 +26,7 @@ Quatro camadas, com fronteiras rígidas entre apresentação e domínio:
 - **UI (apresentação)** — `app.py` + `src/ui/**`: composição Streamlit, tema/CSS, cards, gráficos Plotly, topologia visual, tabela de eventos e estados visuais. Consome apenas contratos tipados do Core; nunca realiza HTTP nem importa `src/integrations/**`.
 - **Core (domínio)** — `src/kpis.py`, `src/chart_data.py`, `src/event_data.py`, `src/root_cause.py`, `src/simulation_state.py`, `src/network_topology.py`, `src/synthetic_data.py`, `src/incident_engine.py`, `src/models.py` e `src/config.py`: funções puras e `dataclass(frozen)`, sem Streamlit, com seed em toda aleatoriedade relevante.
 - **services** — `src/services/real_data_service.py`: orquestra a coleta pública e o recorte geográfico de São Paulo (Haversine).
-- **integrations** — `src/integrations/ripe_atlas.py` e `src/integrations/peeringdb.py`: única camada que faz chamadas de rede (GET público das APIs RIPE Atlas e PeeringDB, com timeout).
+- **integrations** — `src/integrations/ripe_atlas.py`, `src/integrations/peeringdb.py` e `src/integrations/ripestat.py`: única camada que faz chamadas de rede (GET público das APIs RIPE Atlas, PeeringDB e RIPEstat, com timeout).
 
 Documentação completa, com diagrama de fluxo e as premissas do domínio (ECMP, limiares SLO, correlação de incidentes): [docs/architecture.md](docs/architecture.md).
 
@@ -51,7 +52,7 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-A aplicação abre em `http://localhost:8501`. Após a instalação das dependências, o laboratório NOC funciona **offline**; as abas RIPE Atlas e PeeringDB são opcionais e requerem acesso à internet (sem rede, a interface informa a indisponibilidade e mantém a última coleta bem-sucedida). O PeeringDB tem **rate limit anônimo**: ao responder `429 Too Many Requests`, a interface respeita o `Retry-After` indicado antes de nova tentativa e mantém a coleta em cache local por **1 hora**.
+A aplicação abre em `http://localhost:8501`. Após a instalação das dependências, o laboratório NOC funciona **offline**; as abas RIPE Atlas, PeeringDB e RIPEstat são opcionais e requerem acesso à internet (sem rede, a interface informa a indisponibilidade e mantém a última coleta bem-sucedida). O PeeringDB tem **rate limit anônimo**: ao responder `429 Too Many Requests`, a interface respeita o `Retry-After` indicado antes de nova tentativa e mantém a coleta em cache local por **1 hora**. O RIPEstat faz até 3 GETs (um por ASN, 1 s entre eles, parâmetro `sourceapp`), guarda coletas completas por 15 min e parciais por 5 min; um ASN sem resposta não impede a exibição dos demais.
 
 ### Testes e lint
 
@@ -87,6 +88,7 @@ Seção preparada — os PNGs ainda não estão no repositório (a pasta é mant
 3. Na barra lateral, selecione **Core switch down** e clique em **Simular incidente**; salve como `assets/noc-core-down.png`.
 4. Abra a aba *Internet pública — RIPE Atlas (dados reais)* e salve como `assets/ripe-atlas.png`.
 5. Abra a aba *Internet pública — PeeringDB (dados reais)* e salve como `assets/peeringdb.png`.
+6. Abra a aba *Internet pública — RIPEstat (dados reais)* e salve como `assets/ripestat.png`.
 
 | Arquivo | Cenário | Estado |
 | --- | --- | --- |
@@ -94,14 +96,17 @@ Seção preparada — os PNGs ainda não estão no repositório (a pasta é mant
 | `assets/noc-core-down.png` | Core switch down | a gerar |
 | `assets/ripe-atlas.png` | Aba RIPE Atlas | a gerar |
 | `assets/peeringdb.png` | Aba PeeringDB | a gerar |
+| `assets/ripestat.png` | Aba RIPEstat | a gerar |
 
 ## Roadmap / V2
 
 **Implementado (M5):** **PeeringDB** — terceira aba com IXPs e data centers públicos do Brasil com destaque para São Paulo (ver *Funcionalidades*).
 
+**Implementado (M6):** **RIPEstat** — quarta aba com visibilidade BGP pública (routing-status) de ASNs institucionais brasileiros.
+
 Pendentes para **V2**:
 
-- **RIPEstat**: anúncios BGP, visibilidade de rotas e reputação de ASNs.
+- **RIPEstat (extensões)**: histórico de visibilidade e mais ASNs/prefixos.
 - **Adaptador LLM opcional**: sumarização executiva da RCA em linguagem natural, mantendo o motor determinístico como fonte primária da verdade.
 - **Histórico persistente**: backend local (SQLite/DuckDB) para tendências de longo prazo e MTTR.
 - **Detecção estatística de anomalias**: z-score adaptativo e Holt-Winters no lugar de limiares estáticos.

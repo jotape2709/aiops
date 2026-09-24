@@ -5,7 +5,7 @@
 O **AIOps Network Operations Dashboard** é uma plataforma de observabilidade e engenharia de confiabilidade de rede projetada para operar em ambiente local (*air-gapped* e sem dependências de infraestrutura corporativa real). O sistema estrutura-se sobre duas camadas de dados completamente segregadas:
 
 1. **Laboratório NOC (100% Sintético)**: Ambiente simulado de telemetria de rede enterprise/datacenter (nós, enlaces, serviços de negócio, consumo de CPU, latência, perda de pacotes e disponibilidade). Essa camada alimenta todo o fluxo de monitoramento operacional, correlação de alertas, geração de incidentes e análise determinística de causa raiz (RCA).
-2. **Internet Pública (RIPE Atlas e PeeringDB — Dados Reais)**: Monitoramento da infraestrutura externa de sondas de medição (RIPE Atlas) e de pontos de troca de tráfego e data centers (PeeringDB) no Brasil. **Esses dados refletem a topologia e interconexão pública da Internet e NÃO indicam incidentes ou falhas na rede do laboratório**, servindo estritamente como telemetria de contexto de conectividade externa.
+2. **Internet Pública (RIPE Atlas, PeeringDB e RIPEstat — Dados Reais)**: Monitoramento da infraestrutura externa de sondas de medição (RIPE Atlas), de pontos de troca de tráfego e data centers (PeeringDB) e da visibilidade BGP pública de ASNs institucionais (RIPEstat) no Brasil. **Esses dados refletem a topologia e interconexão pública da Internet e NÃO indicam incidentes ou falhas na rede do laboratório**, servindo estritamente como telemetria de contexto de conectividade externa.
 
 ---
 
@@ -210,6 +210,13 @@ As integrações públicas contextualizam a infraestrutura externa da Internet n
   * Em caso de falha de conexão, a exceção é levantada internamente na função cacheada para **não cachear o estado indisponível**; a interface preserva a última coleta bem-sucedida em `st.session_state`.
   * Cooldown de recarga manual de 60 segundos.
 
+### 6.3 RIPEstat (Visibilidade BGP Pública)
+
+* **Endpoint**: `GET https://stat.ripe.net/data/routing-status/data.json?resource=AS<n>&sourceapp=aiops-network-dashboard`, um por ASN de `RIPESTAT_ASNS` (NIC.br AS22548, FAPESP/ANSP AS1251, RNP AS1916 — apenas ASNs institucionais, sem operadoras comerciais).
+* **Coleta (`src/integrations/ripestat.py`)**: sequencial, 1 s entre requisições, timeout de 10 s e orçamento total de 20 s. Erro de um ASN (HTTP ≠ 429, timeout, JSON inválido, `status != ok`) é isolado em `failed_asns` e os demais seguem; somente `429` (com `Retry-After`, sem retry automático) e orçamento esgotado interrompem. `RipeStatError` só é levantado quando nenhum ASN é obtido.
+* **Serviço (`get_ripestat_status`)**: normaliza visibilidade v4/v6 (`ris_peers_seeing / total_ris_peers`; `seeing > total` é descartado como inválido), prefixos anunciados, `first_seen`/`last_seen` e agrega visibilidade plena (≥ 99%), parcial e sem anúncios (0%). Estados `OK`, `PARTIAL` e `UNAVAILABLE`. Cache em memória: OK 900 s, PARTIAL 300 s, UNAVAILABLE nunca; `ignore_cache=True` no botão *Atualizar*.
+* **UI (`src/ui/ripestat.py`)**: sem `st.cache_data` (o cache é do serviço), cooldown de max(60 s, `Retry-After`). ASNs com 0% aparecem como "Sem anúncios observados" (ex.: route servers) — a aba descreve apenas o que os coletores RIS observam e **não** afirma falha de nenhuma organização.
+
 ---
 
 ## 7. Estratégia de Testes e Garantia de Qualidade
@@ -235,7 +242,7 @@ A integridade do sistema é garantida por uma bateria automatizada de testes sem
 ## 8. Limitações Conhecidas e Evolução Futura (V2)
 
 1. **Fontes Públicas Complementares**:
-   * Integração com **RIPEstat API** para telemetria de anúncios BGP, visibilidade de rotas e reputação de ASNs.
+   * Extensões do **RIPEstat** (implementado no M6): histórico de visibilidade e mais recursos por ASN.
 2. **Assistente de Diagnóstico (Adaptador LLM Opcional)**:
    * Interface extensível baseada em provedor abstrato para enriquecer a RCA com sumarizações executivas e sugestões de playbook em linguagem natural, mantendo o motor determinístico como fonte primária da verdade.
 3. **Persistência Histórica e Banco de Dados**:

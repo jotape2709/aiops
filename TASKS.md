@@ -30,7 +30,7 @@
 - [x] docs/linkedin.md
 - [x] QA final
 - [x] Integração real: RIPE Atlas (probes BR/SP)
-- [ ] Integração real: RIPEstat
+- [x] Integração real: RIPEstat (visibilidade BGP de ASNs institucionais BR)
 - [x] Integração real: PeeringDB (IXPs e data centers BR/SP)
 
 ## Regra
@@ -102,3 +102,15 @@ Backlog aberto (baixo, pós-MVP):
 - severidade/confiança no painel de RCA;
 - `compute_kpis` reaproveitar incidentes do estado;
 - 0% quando não há probes ativas deveria ser "—".
+
+### M6 — Terceira integração real: RIPEstat ✅ concluído (2026-09-24)
+
+GET público em `stat.ripe.net/data/routing-status` (com `sourceapp`), um por ASN institucional: NIC.br AS22548, FAPESP/ANSP AS1251, RNP AS1916. Intervalo de 1 s, timeout 10 s, orçamento 20 s; erro de um ASN isolado em `failed_asns` (só 429/orçamento interrompem); estados OK/PARTIAL/UNAVAILABLE; cache no serviço (OK 900 s, PARTIAL 300 s, falha nunca), sem `st.cache_data` na UI; cooldown max(60 s, Retry-After). Quarta aba com KPIs, tabela por ASN e legenda neutra ("Sem anúncios observados" para 0%).
+Validação: revisão cruzada Antigravity↔OpenCode (M6.1 corrigiu linguagem de erro, isolamento por ASN, retorno precoce da UI, seeing > total), 173 testes, Ruff, e carga real controlada pelo Lead. A carga real revelou que o AS26162 (route servers do IX.br) não anuncia rotas desde 2015 e parecia "0% — fora do ar"; foi trocado pelo AS1251. Numa das cargas o AS1251 não respondeu e a aba ficou PARTIAL com os outros 2 ASNs (isolamento funcionando); na repetição, os 3 vieram OK.
+Pendência humana: screenshot `assets/ripestat.png`.
+
+Backlog do M6 (baixo):
+- registrar em log o motivo da falha de cada ASN (hoje só entra em `failed_asns`);
+- orçamento não reserva a duração da próxima requisição (pode passar até +10 s);
+- teto para `Retry-After` (vale também para o PeeringDB);
+- `PARTIAL` latente nas abas Atlas/PeeringDB (`select_display_status`/`_load_*` só tratam OK/UNAVAILABLE; inalcançável hoje).

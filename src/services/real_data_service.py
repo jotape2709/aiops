@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -11,6 +12,9 @@ from typing import Literal
 from src.config import (
     PEERINGDB_SOURCE_URL,
     RIPE_ATLAS_BASE_URL,
+    RIPESTAT_CACHE_TTL_SECONDS,
+    RIPESTAT_PARTIAL_CACHE_TTL_SECONDS,
+    RIPESTAT_SOURCE_URL,
     SAO_PAULO_LAT,
     SAO_PAULO_LON,
     SAO_PAULO_RADIUS_KM,
@@ -26,10 +30,18 @@ from src.integrations.ripe_atlas import (
     RipeAtlasError,
     fetch_br_probes,
 )
+from src.integrations.ripestat import (
+    RipeStatError,
+    RipeStatRawRecord,
+    RipeStatResult,
+    fetch_ripestat_data,
+    format_retry_after,
+)
 
 
 class RealDataState(str, Enum):
     OK = "ok"
+    PARTIAL = "parcial"
     UNAVAILABLE = "indisponivel"
 
 
@@ -391,3 +403,259 @@ def get_peeringdb_status(
             retry_after_seconds=None,
             fetched_endpoints=(),
         )
+
+
+@dataclass(frozen=True)
+class RipeStatRecord:
+    asn: str
+    name: str
+    v4_seeing: int | None
+    v4_total: int | None
+    v4_visibility_pct: float | None
+    v6_seeing: int | None
+    v6_total: int | None
+    v6_visibility_pct: float | None
+    v4_prefixes: int | None
+    v6_prefixes: int | None
+    first_seen: str | None
+    last_seen: str | None
+    query_time: str | None
+
+
+@dataclass(frozen=True)
+class RipeStatAggregates:
+    total_monitored: int
+    v4_full_visibility_count: int
+    v6_full_visibility_count: int
+    v4_partial_visibility_count: int
+    v6_partial_visibility_count: int
+    total_v4_prefixes: int
+    total_v6_prefixes: int
+    v4_no_visibility_count: int = 0
+    v6_no_visibility_count: int = 0
+
+
+@dataclass(frozen=True)
+class RipeStatStatus:
+    """Status consolidado da consulta à API pública de visibilidade do RIPEstat.
+
+    Invariantes do contrato:
+    - state: RealDataState.OK quando todos os ASNs monitorados forem consultados com sucesso;
+      RealDataState.PARTIAL quando houver dados válidos para ao menos um ASN mas consulta não concluída para outro;
+      RealDataState.UNAVAILABLE quando não for possível obter dados de nenhum ASN.
+    - records: tupla de RipeStatRecord normalizados por ASN. Vazia apenas se UNAVAILABLE.
+    - aggregates: presente (RipeStatAggregates) quando state for OK ou PARTIAL com records;
+      estritamente None quando state for UNAVAILABLE.
+    - collected_at: datetime quando state for OK ou PARTIAL; None quando UNAVAILABLE.
+    """
+
+    state: RealDataState
+    message: str
+    collected_at: datetime | None
+    source: str
+    requests_made: int
+    records: tuple[RipeStatRecord, ...]
+    aggregates: RipeStatAggregates | None
+    invalid_count: int
+    retry_after_seconds: int | None = None
+    fetched_asns: tuple[str, ...] = ()
+    failed_asns: tuple[str, ...] = ()
+
+
+def _normalize_ripestat_record(raw: RipeStatRawRecord) -> RipeStatRecord:
+    v4_seeing = raw.visibility.v4_seeing
+    v4_total = raw.visibility.v4_total
+    v4_pct: float | None = None
+    if v4_total is not None and v4_total > 0 and v4_seeing is not None:
+        if v4_seeing <= v4_total:
+            v4_pct = round(100.0 * v4_seeing / v4_total, 2)
+        else:
+            v4_pct = None
+
+    v6_seeing = raw.visibility.v6_seeing
+    v6_total = raw.visibility.v6_total
+    v6_pct: float | None = None
+    if v6_total is not None and v6_total > 0 and v6_seeing is not None:
+        if v6_seeing <= v6_total:
+            v6_pct = round(100.0 * v6_seeing / v6_total, 2)
+        else:
+            v6_pct = None
+
+    return RipeStatRecord(
+        asn=raw.asn,
+        name=raw.name,
+        v4_seeing=v4_seeing,
+        v4_total=v4_total,
+        v4_visibility_pct=v4_pct,
+        v6_seeing=v6_seeing,
+        v6_total=v6_total,
+        v6_visibility_pct=v6_pct,
+        v4_prefixes=raw.v4_prefixes,
+        v6_prefixes=raw.v6_prefixes,
+        first_seen=raw.first_seen,
+        last_seen=raw.last_seen,
+        query_time=raw.query_time,
+    )
+
+
+def _build_ripestat_aggregates(records: tuple[RipeStatRecord, ...]) -> RipeStatAggregates:
+    v4_full = sum(r.v4_visibility_pct is not None and r.v4_visibility_pct >= 99.0 for r in records)
+    v6_full = sum(r.v6_visibility_pct is not None and r.v6_visibility_pct >= 99.0 for r in records)
+    v4_partial = sum(
+        r.v4_visibility_pct is not None and 0.0 < r.v4_visibility_pct < 99.0 for r in records
+    )
+    v6_partial = sum(
+        r.v6_visibility_pct is not None and 0.0 < r.v6_visibility_pct < 99.0 for r in records
+    )
+    v4_no = sum(r.v4_visibility_pct is not None and r.v4_visibility_pct == 0.0 for r in records)
+    v6_no = sum(r.v6_visibility_pct is not None and r.v6_visibility_pct == 0.0 for r in records)
+    total_v4_prefixes = sum(r.v4_prefixes for r in records if r.v4_prefixes is not None)
+    total_v6_prefixes = sum(r.v6_prefixes for r in records if r.v6_prefixes is not None)
+
+    return RipeStatAggregates(
+        total_monitored=len(records),
+        v4_full_visibility_count=v4_full,
+        v6_full_visibility_count=v6_full,
+        v4_partial_visibility_count=v4_partial,
+        v6_partial_visibility_count=v6_partial,
+        total_v4_prefixes=total_v4_prefixes,
+        total_v6_prefixes=total_v6_prefixes,
+        v4_no_visibility_count=v4_no,
+        v6_no_visibility_count=v6_no,
+    )
+
+
+_ripestat_cache: tuple[RipeStatStatus, float, float] | None = None
+
+
+def clear_ripestat_cache() -> None:
+    """Limpa o cache em memória das consultas ao RIPEstat."""
+    global _ripestat_cache
+    _ripestat_cache = None
+
+
+def _do_get_ripestat_status(
+    fetcher: Callable[[], RipeStatResult],
+    clock: Callable[[], datetime],
+) -> RipeStatStatus:
+    try:
+        batch = fetcher()
+        records = tuple(_normalize_ripestat_record(r) for r in batch.records)
+        retry_after = getattr(batch, "retry_after_seconds", None)
+        if batch.failed_asns and not records:
+            state = RealDataState.UNAVAILABLE
+            message = (
+                f"Limite de requisições do RIPEstat atingido; tente novamente em {format_retry_after(retry_after)}."
+                if retry_after
+                else "Dados públicos do RIPEstat indisponíveis no momento. Tente atualizar mais tarde."
+            )
+            collected_at = None
+            aggregates = None
+        elif batch.failed_asns:
+            state = RealDataState.PARTIAL
+            message = (
+                f"Visibilidade obtida para {len(records)} de "
+                f"{len(records) + len(batch.failed_asns)} ASNs monitorados."
+            )
+            collected_at = clock()
+            aggregates = _build_ripestat_aggregates(records)
+        else:
+            state = RealDataState.OK
+            message = "Dados públicos de visibilidade de roteamento do RIPEstat carregados."
+            collected_at = clock()
+            aggregates = _build_ripestat_aggregates(records)
+
+        return RipeStatStatus(
+            state=state,
+            message=message,
+            collected_at=collected_at,
+            source=RIPESTAT_SOURCE_URL,
+            requests_made=batch.requests_made,
+            records=records,
+            aggregates=aggregates,
+            invalid_count=batch.invalid_count,
+            retry_after_seconds=retry_after,
+            fetched_asns=batch.fetched_asns,
+            failed_asns=batch.failed_asns,
+        )
+    except RipeStatError as exc:
+        LOGGER.warning("Consulta ao RIPEstat não concluída: %s", exc)
+        retry_after = getattr(exc, "retry_after_seconds", None)
+        fetched = getattr(exc, "fetched_asns", ())
+        failed = getattr(exc, "failed_asns", ())
+        raw_records = getattr(exc, "records", ())
+        if fetched and raw_records:
+            records = tuple(_normalize_ripestat_record(r) for r in raw_records)
+            aggregates = _build_ripestat_aggregates(records)
+            total = len(fetched) + len(failed)
+            return RipeStatStatus(
+                state=RealDataState.PARTIAL,
+                message=f"Visibilidade obtida para {len(records)} de {total} ASNs monitorados.",
+                collected_at=clock(),
+                source=RIPESTAT_SOURCE_URL,
+                requests_made=getattr(exc, "requests_made", 0),
+                records=records,
+                aggregates=aggregates,
+                invalid_count=getattr(exc, "invalid_count", 0),
+                retry_after_seconds=retry_after,
+                fetched_asns=fetched,
+                failed_asns=failed,
+            )
+        message = (
+            f"Limite de requisições do RIPEstat atingido; tente novamente em {format_retry_after(retry_after)}."
+            if exc.status_code == 429 and retry_after
+            else "Dados públicos do RIPEstat indisponíveis no momento. Tente atualizar mais tarde."
+        )
+        return RipeStatStatus(
+            state=RealDataState.UNAVAILABLE,
+            message=message,
+            collected_at=None,
+            source=RIPESTAT_SOURCE_URL,
+            requests_made=getattr(exc, "requests_made", 0),
+            records=(),
+            aggregates=None,
+            invalid_count=getattr(exc, "invalid_count", 0),
+            retry_after_seconds=retry_after,
+            fetched_asns=(),
+            failed_asns=failed,
+        )
+    except Exception:
+        LOGGER.exception("Falha inesperada ao carregar dados públicos do RIPEstat")
+        return RipeStatStatus(
+            state=RealDataState.UNAVAILABLE,
+            message="Dados públicos do RIPEstat indisponíveis no momento. Tente atualizar mais tarde.",
+            collected_at=None,
+            source=RIPESTAT_SOURCE_URL,
+            requests_made=0,
+            records=(),
+            aggregates=None,
+            invalid_count=0,
+            retry_after_seconds=None,
+            fetched_asns=(),
+            failed_asns=(),
+        )
+
+
+def get_ripestat_status(
+    fetcher: Callable[[], RipeStatResult] = fetch_ripestat_data,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    *,
+    ttl_seconds: float = RIPESTAT_CACHE_TTL_SECONDS,
+    partial_ttl_seconds: float = RIPESTAT_PARTIAL_CACHE_TTL_SECONDS,
+    monotonic_clock: Callable[[], float] = time.monotonic,
+    ignore_cache: bool = False,
+) -> RipeStatStatus:
+    """Obtém status público de visibilidade BGP no RIPEstat com cache em memória (OK: 900 s, PARTIAL: 300 s)."""
+    global _ripestat_cache
+    now_mono = monotonic_clock()
+    if not ignore_cache and _ripestat_cache is not None:
+        cached_status, cached_time, ttl = _ripestat_cache
+        if (now_mono - cached_time) < ttl:
+            return cached_status
+
+    status = _do_get_ripestat_status(fetcher, clock)
+    if status.state == RealDataState.OK:
+        _ripestat_cache = (status, now_mono, ttl_seconds)
+    elif status.state == RealDataState.PARTIAL:
+        _ripestat_cache = (status, now_mono, partial_ttl_seconds)
+    return status
