@@ -123,4 +123,4 @@ Pendentes para **V2**:
 
 ## Licença
 
-A definir.
+Distribuído sob a licença MIT — veja [`LICENSE`](LICENSE).

@@ -64,7 +64,7 @@ Premissas: impacto por ECMP (caminhos mínimos por saltos) + reroute + servidor 
 - ~~gerar screenshots em `assets/`~~ — 5 capturas geradas pelo Portal em 2026-09-24;
 - reprodução em venv limpo não executada pelo Lead: o caminho temporário excede o limite de caminho do Windows (long paths desativado);
 - publicação: M1–M4 publicados em `origin/main` (fa8ce68) em 2026-09-23;
-- escolher licença (README: "A definir").
+- ~~escolher licença~~ — MIT (`LICENSE`), 2026-09-24.
 
 Backlog herdado do QA do M1:
 - símbolos de marcador por tipo de nó (seção 11);
