@@ -121,6 +121,12 @@ Pendentes para **V2**:
 - **SLA/SLO**: indicadores e objetivos por serviço de negócio.
 - **Exportação de relatório**: resumo executivo de incidentes e KPIs para compartilhamento.
 
+## Como foi construído
+
+O projeto foi desenvolvido por uma equipe de agentes de IA conectados no canvas do **Maestri**: **Claude Code** como Lead/arquiteto, coordenando o **Codex** (integrador), o **OpenCode** (Builder-UI) e o **Antigravity** (Builder-CORE).
+
+![Mapa de conexões dos agentes no Maestri](assets/maestri-canvas.png)
+
 ## Licença
 
 Distribuído sob a licença MIT — veja [`LICENSE`](LICENSE).

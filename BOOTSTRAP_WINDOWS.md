@@ -12,6 +12,7 @@ Obrigatório:
 
 Opcional:
 
+- OpenCode e Antigravity (usados como builders na equipe de agentes original; o Codex pode assumir esses papéis)
 - VS Code
 - GitHub CLI (`gh`)
 
@@ -34,10 +35,11 @@ Se `python` não responder, tente:
 py --version
 ```
 
-## Criar repositório
+## Obter o repositório
 
 ```powershell
-git init
+git clone https://github.com/jotape2709/aiops.git
+cd aiops
 ```
 
 ## Ambiente virtual
@@ -56,7 +58,7 @@ py -m venv .venv
 
 ## Dependências do projeto
 
-O agente Builder pode criar `requirements.txt`. Para bootstrap manual, o conjunto esperado é:
+As dependências estão em `requirements.txt`:
 
 ```text
 streamlit

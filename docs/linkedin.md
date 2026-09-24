@@ -35,13 +35,13 @@ O que fez diferença:
 A lição: com vários agentes, o gargalo deixa de ser escrever código. Passa a ser decompor bem o trabalho, definir contratos claros e verificar antes de aceitar.
 
 Stack: Python, Streamlit, Plotly, Pandas, NetworkX e Pytest. Código aberto (MIT):
-<link do repositório>
+https://github.com/jotape2709/aiops
 
 #AIOps #Observabilidade #NOC #Redes #Python #IA #AgentesDeIA #EngenhariaDePrompt
 
 ## Imagens sugeridas (ordem do carrossel)
 
-1. `assets/maestri-canvas.png`: o canvas do Maestri com os 4 terminais e as conexões. Capturar manualmente (Win+Shift+S) e salvar em `assets/`.
+1. `assets/maestri-canvas.png`: o canvas do Maestri com os 4 terminais e as conexões.
 2. `assets/noc-core-down.png`: incidente simulado com a causa raiz.
 3. `assets/noc-normal.png`: estado normal.
 4. `assets/peeringdb.png`: IXPs e data centers.
